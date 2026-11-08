@@ -112,7 +112,7 @@ type pdpClient struct {
 }
 
 // newPDPClient makes the client from the access block. logCacheHits is true when server.log_mode is "detailed": a
-// cache hit then writes an access.decision line too.
+// cache hit then writes an access.decision line too, and the line shows the folder ids (loggedResourcePath).
 func newPDPClient(cfg accessConfig, logCacheHits bool) *pdpClient {
 	transport := &http.Transport{
 		Proxy:               nil,
@@ -689,8 +689,28 @@ func (c *pdpClient) logDecision(requestID, subject string, question pdpQuestion,
 		retry = strconv.FormatInt(answer.RetryAfter, 10)
 	}
 	log.Printf("access.decision request_id=%s subject=%q action=%s resource=%q match=%s usage=%t decision=%t units=%s retry_after=%s reason=%s source=%s failed=%t",
-		pdpLogToken(requestID), subject, pdpLogToken(question.Action), question.Resource.path(), question.match(), usage, answer.Decision, units, retry,
-		pdpLogToken(answer.Reason), answer.Source, answer.Failed)
+		pdpLogToken(requestID), subject, pdpLogToken(question.Action), loggedResourcePath(question.Resource, c.logCacheHits), question.match(), usage,
+		answer.Decision, units, retry, pdpLogToken(answer.Reason), answer.Source, answer.Failed)
+}
+
+// loggedResourcePath gives the path of a resource for the log. A folder id and a subfolder id are parts of object keys.
+// With server.log_mode = "anonymous" (detailed is false), the log shows "-" in place of these ids, as the request log
+// keeps the object keys out. The service id and the bucket id stay.
+func loggedResourcePath(resource accessResource, detailed bool) string {
+	if detailed {
+		return resource.path()
+	}
+	masked := accessResource{Type: resource.Type, ID: resource.ID, Ancestors: make([]accessNode, len(resource.Ancestors))}
+	for index, node := range resource.Ancestors {
+		if node.Type == accessTypeFolder || node.Type == accessTypeSubfolder {
+			node.ID = "-"
+		}
+		masked.Ancestors[index] = node
+	}
+	if masked.Type == accessTypeFolder || masked.Type == accessTypeSubfolder {
+		masked.ID = "-"
+	}
+	return masked.path()
 }
 
 // logFailure writes the line of a failed request. The line never holds the token or a header.

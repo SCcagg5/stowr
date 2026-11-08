@@ -904,11 +904,11 @@ func TestPDPLogLines(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("log =\n%s\nwant 2 lines: a cache hit writes no line without logCacheHits", out.String())
 	}
-	wantFirst := `access.decision request_id=req-1 subject="alice" action=object.read resource="service:svc/bucket:logs/folder:a" match=node usage=false decision=true units=0 retry_after=- reason=- source=pdp failed=false`
+	wantFirst := `access.decision request_id=req-1 subject="alice" action=object.read resource="service:svc/bucket:logs/folder:-" match=node usage=false decision=true units=0 retry_after=- reason=- source=pdp failed=false`
 	if !strings.HasSuffix(lines[0], wantFirst) {
 		t.Fatalf("line 1 = %q\nwant suffix %q", lines[0], wantFirst)
 	}
-	wantUse := `access.decision request_id=req-1 subject="alice" action=object.write resource="service:svc/bucket:logs/folder:a" match=node usage=true decision=false units=- retry_after=12 reason=budget_exceeded source=pdp failed=false`
+	wantUse := `access.decision request_id=req-1 subject="alice" action=object.write resource="service:svc/bucket:logs/folder:-" match=node usage=true decision=false units=- retry_after=12 reason=budget_exceeded source=pdp failed=false`
 	if !strings.HasSuffix(lines[1], wantUse) {
 		t.Fatalf("line 2 = %q\nwant suffix %q", lines[1], wantUse)
 	}
@@ -918,6 +918,24 @@ func TestPDPLogLines(t *testing.T) {
 	client.decide(context.Background(), "req-3", "alice", []pdpQuestion{pdpReadQuestion("a")})
 	if got := out.String(); !strings.Contains(got, "request_id=req-3 ") || !strings.Contains(got, "source=cache failed=false") {
 		t.Fatalf("log = %q, want a cache line", got)
+	}
+	// The detailed log mode shows the folder ids.
+	if got := out.String(); !strings.Contains(got, `resource="service:svc/bucket:logs/folder:a"`) {
+		t.Fatalf("log = %q, want the folder id in the detailed mode", got)
+	}
+}
+
+// The anonymous log mode keeps the folder ids and the subfolder ids out of the log, as it keeps the object keys out.
+func TestLoggedResourcePathMasksTheFolderIDs(t *testing.T) {
+	resource := keyResource("svc", "logs", "a/b/c.txt")
+	if got := loggedResourcePath(resource, false); got != "service:svc/bucket:logs/folder:-/subfolder:-" {
+		t.Fatalf("anonymous path = %q", got)
+	}
+	if got := loggedResourcePath(resource, true); got != "service:svc/bucket:logs/folder:a/subfolder:b" {
+		t.Fatalf("detailed path = %q", got)
+	}
+	if got := loggedResourcePath(bucketResource("svc", "logs"), false); got != "service:svc/bucket:logs" {
+		t.Fatalf("bucket path = %q", got)
 	}
 }
 
@@ -935,7 +953,7 @@ func TestPDPLogOfFailures(t *testing.T) {
 	for _, want := range []string{
 		`access.pdp_failed request_id=req-1 evaluations=1 error="HTTP status 500"`,
 		`access.pdp_credential_refused request_id=req-1 status=401`,
-		`resource="service:svc/bucket:logs/folder:a" match=node usage=false decision=false units=- retry_after=- reason=- source=error failed=true`,
+		`resource="service:svc/bucket:logs/folder:-" match=node usage=false decision=false units=- retry_after=- reason=- source=error failed=true`,
 		`reason="bad reason with spaces\nand a line" source=pdp failed=false`,
 	} {
 		if !strings.Contains(got, want) {
