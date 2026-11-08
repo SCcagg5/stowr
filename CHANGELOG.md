@@ -2,13 +2,16 @@
 
 This document uses ASD-STE100 Simplified Technical English.
 
-## Unreleased
+## 0.2.1 (2026-11-08)
 
 ### Changes
 
 - `access.identity.public_keys` accepts PEM text again, as ClickHouse Dash does. A text that starts with `{` is a JWK Set.
   Other text is PEM: 1 to 16 `-----BEGIN PUBLIC KEY-----` blocks, Ed25519 or P-256 with an uncompressed point. The `kid`
   of a PEM key is its RFC 7638 thumbprint. Refer to `docs/ACCESS.md`, "Public keys".
+- `iat` and `exp` of the identity token are NumericDate numbers (RFC 7519), as in ClickHouse Dash. A fraction, an
+  exponent and a sign are valid. Stowr rounds the value down to a whole second. Before, Stowr refused a token whose `iat`
+  or `exp` was not a whole number, for example `1800000290.0`.
 - A JWK follows the rules of ClickHouse Dash too: the `alg` `EdDSA` of an `OKP` key is accepted, and the members `use` and
   `key_ops` have no effect. A token header with the `alg` `EdDSA` stays refused.
 - No configuration of 0.2.0 stops the start.
