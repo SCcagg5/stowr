@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"path"
@@ -251,6 +252,7 @@ func (a *application) handleArchiveExtract(w http.ResponseWriter, r *http.Reques
 	job, err := a.jobs.create(jobState{
 		Type: jobTypeExtractArchive, Instance: source.cfg.ID, TargetInstance: target.cfg.ID,
 		Source: request.Key, Version: request.Version, Target: request.Target, Entries: request.Entries,
+		Ceilings: accessCeilingsOf(r.Context()),
 	})
 	if err != nil {
 		writeAPIError(w, err)
@@ -293,7 +295,8 @@ func (a *application) handleArchiveEntryIntegrity(w http.ResponseWriter, r *http
 		return
 	}
 	payload := request.archiveEntryIntegrityRequest
-	job, err := a.jobs.create(jobState{Type: jobTypeArchiveEntryIntegrity, Instance: instance.cfg.ID, ArchiveEntryIntegrityRequest: &payload})
+	job, err := a.jobs.create(jobState{Type: jobTypeArchiveEntryIntegrity, Instance: instance.cfg.ID, ArchiveEntryIntegrityRequest: &payload,
+		Ceilings: accessCeilingsOf(r.Context())})
 	if err != nil {
 		writeAPIError(w, err)
 		return
@@ -339,6 +342,10 @@ func openArchiveReader(ctx context.Context, instance *storageInstance, key, vers
 	}
 	reader, err := openRemoteZIPReader(source, extension)
 	if err != nil {
+		// A refusal for a ceiling keeps its own answer: it is not a damaged archive.
+		if refusal, ok := ceilingErrorOf(err); ok {
+			return nil, refusal
+		}
 		return nil, apiError{Status: http.StatusUnprocessableEntity, Code: "invalid_zip", Message: "the object does not contain a readable ZIP central directory"}
 	}
 	// Same cap as the archive preview so selection cost stays bounded by the
@@ -467,6 +474,19 @@ func runArchiveExtraction(ctx context.Context, manager *jobManager, job *jobStat
 		}
 		destinations[destination] = struct{}{}
 		selected = append(selected, file)
+	}
+	// The ceiling object.write: the central directory gives the size of each member, so the check of all of them comes
+	// before the first write. A size that does not fit in an int64 is an unknown size.
+	if ceilingApplies(ctx, actionObjectWrite) {
+		for _, file := range selected {
+			size := int64(-1)
+			if file.UncompressedSize64 <= math.MaxInt64 {
+				size = int64(file.UncompressedSize64)
+			}
+			if err := checkWriteCeiling(ctx, size); err != nil {
+				return err
+			}
+		}
 	}
 
 	result := cloneArchiveExtractResult(job.ArchiveExtract)

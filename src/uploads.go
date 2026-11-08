@@ -444,6 +444,10 @@ func (m *uploadManager) createChecked(ctx context.Context, request createUploadR
 			return uploadSession{}, err
 		}
 	}
+	// The ceiling object.write: the declared total size of the upload is the size of the object that it writes.
+	if err := checkWriteCeiling(ctx, request.Size); err != nil {
+		return uploadSession{}, err
+	}
 	now := time.Now().UTC()
 	upload := uploadSession{
 		Instance:      instance.cfg.ID,
@@ -636,6 +640,10 @@ func (m *uploadManager) uploadChunk(ctx context.Context, id string, request *htt
 	}
 	if request.ContentLength != size {
 		return uploadSession{}, apiError{Status: http.StatusBadRequest, Code: "content_length_mismatch", Message: "Content-Length does not match Content-Range"}
+	}
+	// The ceiling object.write of this request: the continuation answer has its own ceilings.
+	if err := checkWriteCeiling(ctx, upload.TotalSize); err != nil {
+		return uploadSession{}, err
 	}
 
 	if start != upload.UploadedBytes {

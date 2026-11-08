@@ -367,9 +367,19 @@ func (s *storageInstance) ReplaceMetadata(ctx context.Context, key, version, eta
 		return apiError{Status: http.StatusBadRequest, Code: "metadata_unsupported", Message: "the object is encrypted with a key of the customer (SSE-C): Stowr cannot copy it"}
 	}
 	kept := keptObjectHeaders(head.Header)
-	size, _ := strconv.ParseInt(strings.TrimSpace(head.Header.Get("Content-Length")), 10, 64)
+	size, sizeErr := strconv.ParseInt(strings.TrimSpace(head.Header.Get("Content-Length")), 10, 64)
+	// The save writes the whole object again: the ceiling object.write applies to its size.
+	if ceilingApplies(ctx, actionObjectWrite) {
+		known := size
+		if sizeErr != nil || size < 0 {
+			known = -1
+		}
+		if err := checkWriteCeiling(ctx, known); err != nil {
+			return err
+		}
+	}
 	if s.copiesInParts(size) {
-		err = s.CopyMultipart(ctx, key, key, multipartCopyOptions{
+		err = s.copyMultipartObject(ctx, key, key, multipartCopyOptions{
 			SourceVersion: version, SourceETag: etag, ReplaceMetadata: true, Metadata: metadata, ExtraHeaders: kept,
 		})
 	} else {

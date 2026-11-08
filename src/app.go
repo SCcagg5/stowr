@@ -669,7 +669,8 @@ func (a *application) handleCopy(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
-		job, err := a.jobs.create(jobState{Type: jobTypeCopyPrefix, Instance: instance.cfg.ID, Source: source, Target: target})
+		job, err := a.jobs.create(jobState{Type: jobTypeCopyPrefix, Instance: instance.cfg.ID, Source: source, Target: target,
+			Ceilings: accessCeilingsOf(r.Context())})
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -733,7 +734,8 @@ func (a *application) handleRename(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
-		job, err := a.jobs.create(jobState{Type: jobTypeMovePrefix, Instance: instance.cfg.ID, Source: source, Target: target})
+		job, err := a.jobs.create(jobState{Type: jobTypeMovePrefix, Instance: instance.cfg.ID, Source: source, Target: target,
+			Ceilings: accessCeilingsOf(r.Context())})
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -832,14 +834,22 @@ func (a *application) startLargeCopy(ctx context.Context, instance *storageInsta
 	}
 	closeObjectResponse(response)
 	size, err := strconv.ParseInt(strings.TrimSpace(response.Header.Get("Content-Length")), 10, 64)
-	if err != nil || !instance.copiesInParts(size) {
+	if err != nil {
+		return jobState{}, false, nil
+	}
+	// The ceilings of read and write: the refusal comes before the job. The job keeps the ceilings for its own checks.
+	if err := checkCopyCeilings(ctx, size); err != nil {
+		return jobState{}, false, err
+	}
+	if !instance.copiesInParts(size) {
 		return jobState{}, false, nil
 	}
 	jobType := jobTypeCopyObject
 	if move {
 		jobType = jobTypeMoveObject
 	}
-	job, err := a.jobs.create(jobState{Type: jobType, Instance: instance.cfg.ID, Source: source, Target: target, TotalBytes: size})
+	job, err := a.jobs.create(jobState{Type: jobType, Instance: instance.cfg.ID, Source: source, Target: target, TotalBytes: size,
+		Ceilings: accessCeilingsOf(ctx)})
 	return job, err == nil, err
 }
 
@@ -893,6 +903,12 @@ func copyOrMove(ctx context.Context, instance *storageInstance, source, target s
 	}
 	if len(keys) == 0 {
 		return 0, apiError{Status: http.StatusNotFound, Code: "empty_prefix", Message: "source prefix contains no objects"}
+	}
+	// The ceilings of read and write: each size is known now, so the check of all of them comes before the first effect.
+	for _, size := range sizes {
+		if err := checkCopyCeilings(ctx, size); err != nil {
+			return 0, err
+		}
 	}
 	copied := 0
 	if move && instance.movesObjects() {
@@ -1708,6 +1724,9 @@ type apiError struct {
 	Action string
 	// RetryAfter is the wait in seconds. A value above 0 gives the header Retry-After.
 	RetryAfter int64
+	// Ceiling is the name of the ceiling of a refusal for a ceiling. Limit is its value. The JSON error object shows both.
+	Ceiling string
+	Limit   int64
 }
 
 func (e apiError) Error() string { return e.Message }
@@ -1741,6 +1760,10 @@ func writeAPIError(w http.ResponseWriter, err error) {
 		message = apiErr.Message
 		if apiErr.Action != "" {
 			body["action"] = apiErr.Action
+		}
+		if apiErr.Ceiling != "" {
+			body["ceiling"] = apiErr.Ceiling
+			body["limit"] = apiErr.Limit
 		}
 		if code == codeTooManyRequests || code == codePDPUnavailable {
 			body["retryable"] = true

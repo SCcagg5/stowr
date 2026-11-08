@@ -356,7 +356,8 @@ func (g *gcsBackend) getWithGeneration(ctx context.Context, key, generation stri
 			headers.Set(name, value)
 		}
 	}
-	if headers.Get("Range") != "" {
+	// With a ceiling object.read, the answer must tell the real size of the object: no transparent decompression.
+	if headers.Get("Range") != "" || ceilingApplies(ctx, actionObjectRead) {
 		headers.Set("Accept-Encoding", "identity")
 	}
 	resp, err := g.do(ctx, http.MethodGet, u, nil, 0, headers)

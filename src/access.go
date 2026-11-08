@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -83,6 +84,11 @@ type accessRequest struct {
 	// Owner is for the log only. It can be empty.
 	Owner     string
 	RequestID string
+
+	// ceilingMu protects ceilings. A request can read the ceilings in several goroutines.
+	ceilingMu sync.Mutex
+	// ceilings has the ceilings of the true answers of the request. The lower value wins (access_ceiling.go).
+	ceilings accessCeilings
 }
 
 type accessRequestKey struct{}
@@ -339,6 +345,8 @@ func (a *application) checkAnswer(request *accessRequest, ask accessAsk, answer 
 			if kept, found := grant.Limits[ask.Action][name]; !found || value < kept {
 				grant.Limits[ask.Action][name] = value
 			}
+			// The request keeps the ceiling. The storage layer applies it (access_ceiling.go).
+			request.recordCeiling(ask.Action, name, value)
 		case a.accessDoc.isBudget(name):
 			// A budget never comes as a limit of an answer (ProcurAuth 7.5).
 			log.Printf("access.pdp_invalid_answer request_id=%s action=%s limit=%q", pdpLogToken(request.RequestID), ask.Action, name)

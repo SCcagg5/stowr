@@ -168,11 +168,15 @@ type jobState struct {
 	MultipartResult              *multipartAbortResult         `json:"multipart_result,omitempty"`
 	Locked                       int64                         `json:"locked,omitempty"`
 	LockedKeys                   []string                      `json:"locked_keys,omitempty"`
-	Error                        string                        `json:"error,omitempty"`
-	CreatedAt                    time.Time                     `json:"created_at"`
-	UpdatedAt                    time.Time                     `json:"updated_at"`
-	StartedAt                    *time.Time                    `json:"started_at,omitempty"`
-	EndedAt                      *time.Time                    `json:"ended_at,omitempty"`
+	// Refusal is the refusal for a ceiling that stopped the job. A route that waits for the job gives it as it is.
+	Refusal *apiError `json:"-"`
+	// Ceilings has the ceilings of the request that made the job. The job applies them in its own context.
+	Ceilings  accessCeilings `json:"-"`
+	Error     string         `json:"error,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	StartedAt *time.Time     `json:"started_at,omitempty"`
+	EndedAt   *time.Time     `json:"ended_at,omitempty"`
 }
 
 type publicJob struct {
@@ -319,6 +323,7 @@ func cloneJobState(job jobState) jobState {
 	job.IntegrityRequest = cloneIntegrityRequest(job.IntegrityRequest)
 	job.Integrity = cloneIntegrityResult(job.Integrity)
 	job.Entries = append([]string(nil), job.Entries...)
+	job.Ceilings = job.Ceilings.clone()
 	job.ArchiveExtract = cloneArchiveExtractResult(job.ArchiveExtract)
 	job.ArchiveEntryIntegrityRequest = cloneArchiveEntryIntegrityRequest(job.ArchiveEntryIntegrityRequest)
 	job.ArchiveEntryIntegrity = cloneArchiveEntryIntegrityResult(job.ArchiveEntryIntegrity)
@@ -695,7 +700,7 @@ func (m *jobManager) run(id string) {
 	}()
 	// Background jobs are expected to queue for storage slots instead of failing
 	// with the short wait applied to interactive requests.
-	jobContext := withUnboundedGateWait(withResourceBudget(runContext, budget))
+	jobContext := withAccessCeilings(withUnboundedGateWait(withResourceBudget(runContext, budget)), job.Ceilings)
 	err := m.executeRecovered(jobContext, &job)
 	usage := budget.usage()
 	job.StorageRequests = usage.StorageRequests
@@ -724,6 +729,9 @@ func (m *jobManager) run(id string) {
 	if err != nil {
 		job.Status = jobStatusFailed
 		job.Error = publicJobError(err)
+		if refusal, ok := ceilingErrorOf(err); ok {
+			job.Refusal = &refusal
+		}
 	} else {
 		job.Status = jobStatusCompleted
 		job.Error = ""
@@ -771,6 +779,12 @@ func (m *jobManager) execute(ctx context.Context, job *jobState) error {
 				return err
 			}
 		}
+		// The ceilings of read and write: the check of each listed size comes before the first copy.
+		if job.LastKey == "" {
+			if err := checkListedSizes(ctx, instance, job.Source, actionObjectRead, actionObjectWrite); err != nil {
+				return err
+			}
+		}
 		return m.runObjectJob(ctx, job, instance, func(ctx context.Context, object objectInfo, relative string) error {
 			destination := job.Target + strings.TrimPrefix(relative, job.Source)
 			return m.copyCounted(ctx, job, instance, relative, destination, object.Size)
@@ -778,6 +792,12 @@ func (m *jobManager) execute(ctx context.Context, job *jobState) error {
 	case jobTypeMovePrefix:
 		for _, permission := range []string{permissionRead, permissionWrite, permissionDelete} {
 			if err := requirePermission(instance, permission); err != nil {
+				return err
+			}
+		}
+		// The ceilings of read and write: the check of each listed size comes before the first move.
+		if job.LastKey == "" {
+			if err := checkListedSizes(ctx, instance, job.Source, actionObjectRead, actionObjectWrite); err != nil {
 				return err
 			}
 		}
@@ -1283,6 +1303,18 @@ func (m *jobManager) copyCounted(ctx context.Context, job *jobState, instance *s
 	return nil
 }
 
+// lowerCeilings gives the stored job the lower value of each ceiling of its own ceilings and of the ceilings given.
+func (m *jobManager) lowerCeilings(id string, ceilings accessCeilings) {
+	if len(ceilings) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if job := m.jobs[id]; job != nil {
+		job.Ceilings = job.Ceilings.merge(ceilings)
+	}
+}
+
 // setCopyingBytes changes only the copied parts of the stored job. The job loop keeps the other fields.
 func (m *jobManager) setCopyingBytes(id string, bytes int64) {
 	m.mu.Lock()
@@ -1622,6 +1654,10 @@ func (a *application) handleJobs(w http.ResponseWriter, r *http.Request) {
 	if err := a.authorizeJob(r, job); err != nil {
 		writeAPIError(w, err)
 		return
+	}
+	if parts[1] == "resume" {
+		// The answers of the PDP can have a lower ceiling now: the job runs again with the lower value of each ceiling.
+		a.jobs.lowerCeilings(id, accessCeilingsOf(r.Context()))
 	}
 	job, err := a.jobs.changeStatus(id, parts[1])
 	if err != nil {

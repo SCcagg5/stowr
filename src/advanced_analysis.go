@@ -317,7 +317,8 @@ func (a *application) handleIntegrity(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, err)
 		return
 	}
-	job, err := a.jobs.create(jobState{Type: jobTypeIntegrity, Instance: instance.cfg.ID, IntegrityRequest: &request.integrityRequest})
+	job, err := a.jobs.create(jobState{Type: jobTypeIntegrity, Instance: instance.cfg.ID, IntegrityRequest: &request.integrityRequest,
+		Ceilings: accessCeilingsOf(r.Context())})
 	if err != nil {
 		writeAPIError(w, err)
 		return
@@ -328,6 +329,10 @@ func (a *application) handleIntegrity(w http.ResponseWriter, r *http.Request) {
 func (a *application) writeAnalysisJobResponse(w http.ResponseWriter, r *http.Request, job jobState) {
 	if completed, terminal := a.jobs.waitForTerminal(r.Context(), job.ID, analysisInlineWait); terminal {
 		if completed.Status == jobStatusFailed {
+			if completed.Refusal != nil {
+				writeAPIError(w, *completed.Refusal)
+				return
+			}
 			writeAPIError(w, apiError{Status: http.StatusUnprocessableEntity, Code: "analysis_failed", Message: completed.Error})
 			return
 		}

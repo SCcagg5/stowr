@@ -268,6 +268,11 @@ func (a *application) handleArchivePreview(w http.ResponseWriter, r *http.Reques
 	}
 	reader, err := openRemoteZIPReader(source, extension)
 	if err != nil {
+		// A refusal for a ceiling keeps its own answer: it is not a damaged archive.
+		if refusal, ok := ceilingErrorOf(err); ok {
+			writeAPIError(w, refusal)
+			return
+		}
 		writeAPIError(w, apiError{Status: http.StatusUnprocessableEntity, Code: "invalid_zip", Message: "the object does not contain a readable ZIP central directory"})
 		return
 	}

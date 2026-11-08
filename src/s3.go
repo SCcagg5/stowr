@@ -226,7 +226,8 @@ func (s *s3Backend) getWithQuery(ctx context.Context, key string, query url.Valu
 			headers.Set(name, value)
 		}
 	}
-	if headers.Get("Range") != "" {
+	// With a ceiling object.read, the answer must tell the real size of the object: no transparent decompression.
+	if headers.Get("Range") != "" || ceilingApplies(ctx, actionObjectRead) {
 		headers.Set("Accept-Encoding", "identity")
 	}
 	resp, err := s.do(ctx, http.MethodGet, key, query, nil, 0, headers)

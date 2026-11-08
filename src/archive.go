@@ -51,6 +51,12 @@ func (a *application) handleArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The ceiling object.read: the check of each listed size comes before the first byte of the ZIP.
+	if err := checkArchiveSizes(r.Context(), instance, prefix); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
 	filename := archiveFilename(r.URL.Query().Get("name"), prefix, instance.cfg.Name)
 	w.Header().Set("Content-Type", "application/zip")
 	if value := mime.FormatMediaType("attachment", map[string]string{"filename": filename}); value != "" {
@@ -142,6 +148,24 @@ func (a *application) handleArchive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(archiveStatusTrailer, status)
 	w.Header().Set(archiveEntriesTrailer, strconv.Itoa(entries))
 	w.Header().Set(archiveBytesTrailer, strconv.FormatInt(writtenBytes, 10))
+}
+
+// checkArchiveSizes lists each object that the ZIP of a folder holds and checks its size against the ceiling object.read.
+// It makes no request when no ceiling applies. A refusal is a 403 before the ZIP starts: the ZIP never has a cut member.
+func checkArchiveSizes(ctx context.Context, instance *storageInstance, prefix string) error {
+	if !ceilingApplies(ctx, actionObjectRead) {
+		return nil
+	}
+	return forEachObjectAfter(ctx, instance, prefix, "", func(object objectInfo, relative string) error {
+		if !strings.HasPrefix(relative, prefix) {
+			return nil
+		}
+		name, ok := safeArchiveEntryName(strings.TrimPrefix(relative, prefix))
+		if !ok || (strings.HasSuffix(name, "/") && object.Size == 0) {
+			return nil
+		}
+		return checkReadCeiling(ctx, object.Size)
+	})
 }
 
 // archivePrefetchMaxBytes is the largest member (current or next) for which the next member's request is started early.

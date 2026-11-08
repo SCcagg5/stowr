@@ -198,6 +198,14 @@ func (s *storageInstance) Get(ctx context.Context, key string, headers http.Head
 		s.observePermission(permissionRead, err)
 		return objectResponse{}, err
 	}
+	// The ceiling object.read: the check comes before any byte goes to the caller.
+	if err := checkReadAnswer(ctx, response); err != nil {
+		release()
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return objectResponse{}, err
+	}
 	if response.Body != nil {
 		response.Body = &releaseReadCloser{
 			ReadCloser: &budgetReadCloser{body: response.Body, budget: budgetFromContext(ctx)},
@@ -223,6 +231,10 @@ func (r *releaseReadCloser) Close() error {
 }
 
 func (s *storageInstance) Put(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	// The ceiling object.write: the check comes before the read of the body. A size below 0 is an unknown size.
+	if err := checkWriteCeiling(ctx, size); err != nil {
+		return err
+	}
 	release, err := s.beginStorageRequest(ctx)
 	if err != nil {
 		return err
@@ -243,6 +255,9 @@ func (s *storageInstance) Put(ctx context.Context, key string, body io.Reader, s
 // preconditions. The fallback is intentionally conservative and is used only
 // by test or third-party backends that do not expose conditional writes.
 func (s *storageInstance) PutIfAbsent(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if err := checkWriteCeiling(ctx, size); err != nil {
+		return err
+	}
 	if conditional, ok := s.backend.(ConditionalObjectWriter); ok {
 		release, err := s.beginStorageRequest(ctx)
 		if err != nil {
@@ -404,7 +419,16 @@ func xmlSafeKey(key string) bool {
 	return true
 }
 
+// Copy copies one object. A ceiling of read or write applies to the size of the source: the check comes before the copy.
 func (s *storageInstance) Copy(ctx context.Context, source, destination string) error {
+	if err := s.checkCopySource(ctx, source, ""); err != nil {
+		return err
+	}
+	return s.copyObject(ctx, source, destination)
+}
+
+// copyObject copies one object with one request. The caller checks the ceilings.
+func (s *storageInstance) copyObject(ctx context.Context, source, destination string) error {
 	release, err := s.beginStorageRequest(ctx)
 	if err != nil {
 		return err
@@ -434,6 +458,9 @@ func (s *storageInstance) Move(ctx context.Context, source, destination string) 
 	mover, ok := s.backend.(ObjectMover)
 	if !ok {
 		return apiError{Status: http.StatusNotImplemented, Code: "move_unsupported", Message: "this storage provider does not move objects with a rename"}
+	}
+	if err := s.checkCopySource(ctx, source, ""); err != nil {
+		return err
 	}
 	release, err := s.beginStorageRequest(ctx)
 	if err != nil {
@@ -468,11 +495,18 @@ func (s *storageInstance) removeEmptyFolders(ctx context.Context, prefix string)
 
 // CopySized copies one object whose size the caller knows. From multipartCopyThreshold up, a backend that copies in
 // parts gets a copy in parts. Other copies are one CopyObject request. Progress receives the size of each copied part.
+//
+// The caller gives the size: the check of the ceilings of read and write uses it and makes no HEAD request.
 func (s *storageInstance) CopySized(ctx context.Context, source, destination string, size int64, progress func(int64)) error {
-	if s.copiesInParts(size) {
-		return s.CopyMultipart(ctx, source, destination, multipartCopyOptions{Progress: progress})
+	if ceilingApplies(ctx, actionObjectRead, actionObjectWrite) {
+		if err := checkCopyCeilings(ctx, size); err != nil {
+			return err
+		}
 	}
-	return s.Copy(ctx, source, destination)
+	if s.copiesInParts(size) {
+		return s.copyMultipartObject(ctx, source, destination, multipartCopyOptions{Progress: progress})
+	}
+	return s.copyObject(ctx, source, destination)
 }
 
 // copiesInParts reports whether a copy of size bytes goes in parts.
@@ -483,7 +517,19 @@ func (s *storageInstance) copiesInParts(size int64) bool {
 
 // CopyMultipart copies an object in parts. Each request of the copy takes a slot of the gates of the instance, so the
 // limits of concurrent requests apply. A request waits for its slot without time limit: a copy in parts is long.
+//
+// A ceiling of read or write applies to the size of the source: the check comes before the copy.
 func (s *storageInstance) CopyMultipart(ctx context.Context, source, destination string, options multipartCopyOptions) error {
+	if _, ok := s.backend.(ObjectMultipartCopier); ok {
+		if err := s.checkCopySource(ctx, source, options.SourceVersion); err != nil {
+			return err
+		}
+	}
+	return s.copyMultipartObject(ctx, source, destination, options)
+}
+
+// copyMultipartObject copies an object in parts. The caller checks the ceilings.
+func (s *storageInstance) copyMultipartObject(ctx context.Context, source, destination string, options multipartCopyOptions) error {
 	copier, ok := s.backend.(ObjectMultipartCopier)
 	if !ok {
 		return apiError{Status: http.StatusNotImplemented, Code: "multipart_copy_unsupported", Message: "this storage provider does not copy objects in parts"}
@@ -525,6 +571,10 @@ func (s *storageInstance) InitiateMultipart(ctx context.Context, key, contentTyp
 }
 
 func (s *storageInstance) UploadPart(ctx context.Context, key, uploadID string, partNumber int, body io.Reader, size int64) (string, error) {
+	// A part is not larger than its object: a part over the ceiling object.write is a refusal.
+	if err := checkWriteCeiling(ctx, size); err != nil {
+		return "", err
+	}
 	backend, ok := s.backend.(s3MultipartAPI)
 	if !ok {
 		return "", errors.New("s3 backend does not support multipart uploads")
@@ -585,6 +635,9 @@ func (s *storageInstance) AbortMultipart(ctx context.Context, key, uploadID stri
 }
 
 func (s *storageInstance) InitiateResumable(ctx context.Context, key string, total int64, contentType string) (string, error) {
+	if err := checkWriteCeiling(ctx, total); err != nil {
+		return "", err
+	}
 	backend, ok := s.backend.(gcsResumableAPI)
 	if !ok {
 		return "", errors.New("gcs backend does not support resumable uploads")
@@ -600,6 +653,10 @@ func (s *storageInstance) InitiateResumable(ctx context.Context, key string, tot
 }
 
 func (s *storageInstance) UploadResumableChunk(ctx context.Context, sessionURL string, body io.Reader, start, size, total int64, contentType string) (int64, bool, error) {
+	// The total is the size of the object that the upload writes.
+	if err := checkWriteCeiling(ctx, total); err != nil {
+		return 0, false, err
+	}
 	backend, ok := s.backend.(gcsResumableAPI)
 	if !ok {
 		return 0, false, errors.New("gcs backend does not support resumable uploads")

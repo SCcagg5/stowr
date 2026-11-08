@@ -478,6 +478,10 @@ func (s *objectRangeSource) ReadRange(start, length int64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid object metadata range")
 	}
 	if size := s.Size(); size > 0 {
+		// A cached span can come from a request with a higher ceiling: the ceiling of this request applies to it too.
+		if err := checkReadCeiling(s.ctx, size); err != nil {
+			return nil, err
+		}
 		if start >= size {
 			return nil, io.EOF
 		}

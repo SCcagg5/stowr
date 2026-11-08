@@ -129,6 +129,14 @@ func (s *storageInstance) GetVersion(ctx context.Context, key, version string, h
 		s.observePermission(permissionRead, err)
 		return objectResponse{}, err
 	}
+	// The ceiling object.read: the check comes before any byte goes to the caller.
+	if err := checkReadAnswer(ctx, response); err != nil {
+		release()
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return objectResponse{}, err
+	}
 	if response.Body != nil {
 		response.Body = &releaseReadCloser{
 			ReadCloser: &budgetReadCloser{body: response.Body, budget: budgetFromContext(ctx)},
@@ -175,14 +183,34 @@ func (s *storageInstance) RestoreVersion(ctx context.Context, key, version strin
 	// A version from multipartCopyThreshold up is too large for CopyObject: it goes in parts. The copy sends the SSE-S3
 	// or SSE-KMS headers of the version, so the restored object keeps its encryption. When the HEAD fails, the plain
 	// restore below gives the error of the provider.
+	//
+	// A ceiling of read or write applies to the size of the version: the HEAD request gives it, and the check comes before
+	// the restore. A HEAD request that fails stops the restore when a ceiling applies.
 	var kept http.Header
-	if _, inParts := s.backend.(ObjectMultipartCopier); inParts {
-		if response, headErr := s.HeadVersion(ctx, key, version); headErr == nil {
+	_, inParts := s.backend.(ObjectMultipartCopier)
+	bound := ceilingApplies(ctx, actionObjectRead, actionObjectWrite)
+	if inParts || bound {
+		response, headErr := s.HeadVersion(ctx, key, version)
+		if headErr == nil {
 			closeObjectResponse(response)
-			kept = keptEncryptionHeaders(response.Header)
-			if size, sizeErr := strconv.ParseInt(strings.TrimSpace(response.Header.Get("Content-Length")), 10, 64); sizeErr == nil && s.copiesInParts(size) {
-				return s.CopyMultipart(ctx, key, key, multipartCopyOptions{SourceVersion: version, ExtraHeaders: kept})
+			size, sizeErr := strconv.ParseInt(strings.TrimSpace(response.Header.Get("Content-Length")), 10, 64)
+			if bound {
+				known := size
+				if sizeErr != nil || size < 0 {
+					known = -1
+				}
+				if err := checkCopyCeilings(ctx, known); err != nil {
+					return err
+				}
 			}
+			if inParts {
+				kept = keptEncryptionHeaders(response.Header)
+				if sizeErr == nil && s.copiesInParts(size) {
+					return s.copyMultipartObject(ctx, key, key, multipartCopyOptions{SourceVersion: version, ExtraHeaders: kept})
+				}
+			}
+		} else if bound {
+			return headErr
 		}
 	}
 	release, err := s.beginStorageRequest(ctx)
