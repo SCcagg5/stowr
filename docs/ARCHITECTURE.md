@@ -17,6 +17,11 @@ HCL defines reusable authentication objects and bucket views. Buckets referencin
 - navigation scan limit;
 - learned capability state.
 
+## Access policy
+
+The `access` block sets who can use the server. In mode `authzen`, each route checks the identity token and asks a PDP. The
+rules, the routes and the resource tree are in [ACCESS.md](ACCESS.md).
+
 ## Storage interfaces
 
 The backend separates listing, object reads, ranged reads, writes, deletion, copy/rewrite, multipart upload, and version operations. Read-only preview code receives only the operations it needs.
@@ -729,10 +734,16 @@ block". The test with a real `weed mount` is in [test/README.md](../test/README.
 
 - A key is a path relative to the root of the volume. The server refuses a key with an empty, `.` or `..` part, a NUL
   byte, or a part of more than 255 bytes (`400 invalid_key`).
-- The server resolves each part of a path, one after the other. A symbolic link to a place inside the root is
-  followed. A symbolic link that leaves the root, or that does not resolve, stops the operation with
+- The server resolves each part of a path, one after the other. With `access.mode = "open"`, a symbolic link to a place
+  inside the root is followed. A symbolic link that leaves the root, or that does not resolve, stops the operation with
   `403 volume_link_refused`. The listing with a delimiter shows such a link as an entry with `"unreadable": true`.
   The interface shows it with a ban icon and no action. A delete of such a link is also refused.
+- With `access.mode = "authzen"`, the server follows no symbolic link in the path of a key, also a link to a place inside
+  the root. The access policy gives a grant on a folder by the key of the object, not by its real path: a link from one
+  folder to another folder would let a person read the other folder. Each link in the path of a key gives
+  `403 volume_link_refused`, and the list of a folder shows it as an unreadable entry. The server opens the last part of a file for a
+  read or a copy with `O_NOFOLLOW`. The server resolves `path` and `root_prefix` one time at start: a link there is not a link
+  of a key. Refer to [ACCESS.md](ACCESS.md), "Volumes and symbolic links".
 - A file that is not a regular file (a device, a socket, a pipe) is also unreadable. The server never opens it.
 - Hidden files (a name that starts with `.`) are visible. The names keep the case that the file system gives.
 - A name that is not valid UTF-8 shows with the replacement character. The server cannot read, write or delete it.
@@ -744,8 +755,9 @@ block". The test with a real `weed mount` is in [test/README.md](../test/README.
 
 ### Listing
 
-- With the delimiter `/`, the server reads one folder. The subfolders are the prefixes, also an empty folder and a
-  symbolic link to a folder of the root. The other entries are the objects.
+- With the delimiter `/`, the server reads one folder. The subfolders are the prefixes, also an empty folder and, with
+  `access.mode = "open"`, a symbolic link to a folder of the root. With `access.mode = "authzen"`, such a link is an
+  unreadable entry. The other entries are the objects.
 - Without a delimiter, the server reads the tree: the files, and each empty folder as the key `<folder>/` with size 0
   (as the folder objects of S3). It does not follow a symbolic link to a folder, because a link can make a loop.
 - The order is the order of the keys of S3 (bytes of UTF-8). The page token is the last key of the page. A token
@@ -778,7 +790,8 @@ block". The test with a real `weed mount` is in [test/README.md](../test/README.
 - A write with the header `X-Checksum-Sha256` compares the SHA-256 of the received bytes with the digest of the
   client. A different digest stops the write (`400 bad_digest`), and the target does not change.
 - A write makes the missing folders of the path. A part of the path that is a file stops the write (`409`).
-- A write through a symbolic link to a file of the root writes the target file. The link stays.
+- With `access.mode = "open"`, a write through a symbolic link to a file of the root writes the target file. The link stays.
+  With `access.mode = "authzen"`, this write gives `403 volume_link_refused`.
 - A key that ends with `/` and has no content makes a folder (`mkdir`). The Actions menu of the interface has the
   item "New folder" for a volume.
 - A delete of a file removes the file. A delete of a folder key (`<folder>/`) removes the folder when it is empty. A

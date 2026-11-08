@@ -15,7 +15,7 @@ Core properties:
 - bounded provider requests, transferred bytes, concurrency, cache size, and in-memory job history;
 - frontend URLs resolved relative to `document.baseURI` for deployment behind a path-stripping reverse proxy;
 - no runtime CDN or third-party asset requests;
-- no authentication of its own: put a reverse proxy that authenticates the users in front of Stowr.
+- an access policy that the `access` block sets: the mode `authzen` checks the identity token of the edge and asks a PDP for each operation (protocol ProcurAuth). The mode `open` needs a reverse proxy that authenticates the users.
 
 ## Quick start
 
@@ -26,7 +26,30 @@ CGO_ENABLED=0 go build -trimpath -o stowr .
 ./stowr -c ../config.hcl
 ```
 
-The configuration must contain one `bucket` block or one `volume` block at least. A `bucket` block needs an `auth` block.
+The configuration must contain one `access` block, and one `bucket` block or one `volume` block at least. A `bucket` block needs an `auth` block. Refer to "Access policy" for the `access` block.
+
+## Access policy
+
+The `access` block is mandatory. Mode `authzen` checks the identity token that the edge signs, and asks a PDP (Policy Decision Point) for each operation. Mode `open` checks nothing: use it only behind a reverse proxy that authenticates the users.
+
+```hcl
+access {
+  mode = "authzen"
+
+  identity {
+    issuer           = "https://edge.example"
+    audience         = "infra-s3"
+    public_keys_file = "/run/keys/edge-jwks.json"
+  }
+
+  pdp {
+    url        = "https://pdp.example:4182"
+    token_file = "/run/secrets/pdp-token"
+  }
+}
+```
+
+Refer to [docs/ACCESS.md](docs/ACCESS.md) for the rules, and to [docs/CONFORMANCE.md](docs/CONFORMANCE.md) for the conformance test.
 
 ## Shared authentication and bucket-specific policy
 
@@ -78,7 +101,7 @@ Completed and canceled uploads are removed from server memory. The process track
 
 A `volume` block shows a folder of the server as a bucket: a Docker volume, an NFS or CephFS mount, or a FUSE mount such
 as `weed mount` of SeaweedFS. The browser reads and writes its files with the identity of the process. Each write goes
-to a temporary file and replaces the target with one rename. A symbolic link that leaves the folder is not followed.
+to a temporary file and replaces the target with one rename. A symbolic link that leaves the folder is not followed. With `access.mode = "authzen"`, no symbolic link is followed.
 
 ```hcl
 volume "shared" {
@@ -146,6 +169,8 @@ The application never downloads these files at runtime.
 
 - [Configuration](docs/CONFIGURATION.md)
 - [Configuration reference](docs/configuration-reference.md) (generated)
+- [Access policy](docs/ACCESS.md)
+- [Conformance of the access policy](docs/CONFORMANCE.md)
 - [Changes](CHANGELOG.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Preview and metadata behavior](docs/PREVIEWS.md)

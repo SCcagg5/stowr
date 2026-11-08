@@ -6,6 +6,7 @@ The application accepts one HCL file through `-c <path>` or `-config <path>`. Ru
 
 Supported top-level blocks:
 
+- exactly one `access` block (refer to "Access");
 - zero or one `server` block;
 - zero or more `auth "id"` blocks;
 - zero or more `bucket "id"` blocks. Each `bucket` block needs an `auth` block;
@@ -200,9 +201,44 @@ These rules stop the start:
 The address of a volume in the interface is `/-/volume/<id>/`. The process of Stowr reads and writes the files: give it the owner or the group of the folder. In a container, mount the folder with
 write access, and keep the root file system read only.
 
-## Authentication
+## Access
 
-Stowr has no authentication of its own. Each person who can send a request to the server can do each operation that the permissions of the buckets and the volumes let. Put a reverse proxy that authenticates the users in front of Stowr. A file with an `access` block stops the start: the block is unknown.
+The `access` block is mandatory. A file without it stops the start. The block sets who can use Stowr. Its key `mode` has two values.
+
+- `authzen`: Stowr checks the identity token that the edge signs. It asks a PDP (Policy Decision Point) for each operation.
+  The blocks `identity` and `pdp` are mandatory.
+- `open`: Stowr checks no token and asks no PDP. The two blocks are not allowed. Use this mode only behind a reverse proxy that
+  authenticates the users. Stowr writes a warning at start.
+
+```hcl
+access {
+  mode = "authzen"
+
+  identity {
+    issuer           = "https://edge.example"
+    audience         = "infra-s3"
+    public_keys_file = "/run/keys/edge-jwks.json"
+  }
+
+  pdp {
+    url        = "https://pdp.example:4182"
+    token_file = "/run/secrets/pdp-token"
+  }
+}
+```
+
+```hcl
+access {
+  mode = "open"
+}
+```
+
+[configuration-reference.md](configuration-reference.md) gives each key of the block with its default, its range and its forms.
+[ACCESS.md](ACCESS.md) gives the rules of the identity token, the resource tree, the actions, the routes, the budgets and the
+errors.
+
+The key `server.access_mode` is a storage ceiling of the process: `force_read_only` refuses each write and each delete for all
+the people. The `access` block sets the access of each person. The two apply together, and `server.access_mode` is checked first.
 
 ## Version capability probe
 

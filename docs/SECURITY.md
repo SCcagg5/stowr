@@ -16,9 +16,39 @@ The supplied scratch image runs with a read-only root filesystem and no data vol
 
 Provider audit systems can still record every network request. The application cannot make reads or writes invisible to S3, GCS, Garage, or an intermediary proxy.
 
-## Authentication
+## Access policy
 
-Stowr has no authentication of its own. Each request that reaches the server can do each operation that the permissions of the buckets and the volumes let. Put a reverse proxy that authenticates the users in front of Stowr, and do not publish the port of Stowr. The interface shows one notice when the reverse proxy answers 401.
+The `access` block is mandatory. Its key `mode` is `authzen` or `open`. [ACCESS.md](ACCESS.md) gives the full rules.
+
+### Mode authzen
+
+The edge authenticates the person and signs an identity token. Stowr checks the token on each request, and asks a PDP
+(Policy Decision Point) for each operation. Stowr follows the protocol ProcurAuth.
+
+- Stowr accepts a token with the algorithm `Ed25519` or `ES256` only. It refuses `EdDSA`. It reads the token only from the
+  configured header, never from `Authorization`, a cookie or a query parameter.
+- Stowr accepts requests only through the edge (P 9.4). Use a network rule: a firewall, a network policy or a private
+  network. Do not publish the port of Stowr. A client that reaches Stowr without the edge skips the other checks of the edge.
+  Stowr writes a warning at start when `server.listen` accepts requests on each network interface.
+- The routes `/healthz` and `/.well-known/procurauth/actions` need no token. The static files, the pages, `/api/build` and
+  `OPTIONS /s3` need a token but ask no PDP question. They hold no data of a bucket. Each other route asks the PDP.
+- A route that has no access rule answers 403. An action that the configuration does not serve answers 403.
+- Stowr fails closed. When the PDP gives no valid answer, Stowr answers `503 pdp_unavailable`, never 403 and never an
+  allow. Stowr never sends a question again.
+- A kept answer of the PDP stays valid for `access.pdp.cache_ttl` at most (default 30 s). A revoked grant can stay active for
+  this time. Set `cache_ttl = "0s"` to keep no answer.
+- A volume follows no symbolic link in the path of a key. A grant is on the key of an object, not on its real path.
+- The PDP token is a secret. The file refuses it in clear text: give `token_env` or `token_file`. Keep the network of the PDP
+  closed, and use an https URL. `plain_http = true` sends the token and the questions without TLS.
+- The log line `access.decision` shows the subject and the node. With `server.log_mode = "anonymous"`, it shows `-` in place
+  of the folder ids. Keep the log under the rules of your data policy.
+
+### Mode open
+
+Stowr checks no token and asks no PDP. Each request that reaches Stowr can do each operation that the process ceilings let
+(the `permissions` of the blocks and `server.access_mode`). Use this mode only behind a reverse proxy that authenticates the
+users. Do not publish the port of Stowr. Stowr writes a warning at start. The interface shows one notice when the
+reverse proxy answers 401.
 
 ## Permission enforcement
 
@@ -28,6 +58,7 @@ Effective access is the intersection of:
 
 - implemented operation;
 - bucket permission ceiling;
+- the decision of the PDP, in mode `authzen`;
 - provider credential policy;
 - object retention, encryption, and provider policy;
 - optional `force_read_only` access mode.
@@ -65,7 +96,7 @@ Every route that returns object bytes (`/s3`, `/open/`, image previews and `/api
 
 ## Raw private-key preview
 
-Raw key preview is intentionally available. Read permission is required, and content remains inside the same-origin application. Deployments containing private keys should place an appropriate access-control layer at the reverse proxy and keep anonymous request logging enabled.
+The preview of a raw key is available on purpose. It needs the read permission, and its content stays inside the application, on the same origin. A deployment that holds private keys must limit the grants of `object.read` to the folders that need them. It can also use an access control at the reverse proxy. Keep `server.log_mode = "anonymous"`.
 
 ## Complete-object operations
 

@@ -155,6 +155,30 @@ These facts come from the run of 2026-10-21 on a Debian 13 host (Linux 6.12, Doc
 When a host refuses FUSE in Docker (no `/dev/fuse`, or a security profile that refuses the mount), `run.sh` stops with
 the log of `weed mount` and a message. The tests of the browser test stack then cover a volume on a plain Docker volume.
 
+## Conformance test of the access policy
+
+`conformance/run.sh` runs the series U of the ProcurAuth conformance runner (`access-conformance`, role `pep`) against Stowr.
+The rules of the test are in [docs/CONFORMANCE.md](../docs/CONFORMANCE.md).
+
+```sh
+test/conformance/run.sh
+```
+
+The script needs Docker and `python3`. It reads the ProcurAuth repository in the directory `procurauth` next to the checkout
+of Stowr. Set `PROCURAUTH_DIR` for another place. The options are `--cases`, `--format` and `--no-build`.
+
+The files:
+
+| File | Use |
+|---|---|
+| `conformance/run.sh` | Builds the runner and Stowr, starts Stowr in a container with no network, and runs the runner in its network namespace. |
+| `conformance/config.hcl` | The configuration of Stowr: mode `authzen`, the test keys of ProcurAuth, a PDP on `127.0.0.1:8181` and one volume `conf`. |
+| `conformance/profile.json` | The profile of the service: the service id `infra-s3`, the token rules and four operations. |
+| `conformance/expected.txt` | The failed cases that are known. It has no case now. |
+
+The fixture is a volume with the file `reports/a.txt` (12 bytes) and the empty folder `reports/2026`. The runner is the client,
+the edge and the PDP. Stowr never reaches a real PDP. The expected result is 99 cases: 74 passed, 0 failed and 25 skipped.
+
 ## Functions of each provider
 
 These facts come from S3 requests to the three providers of the browser test stack, with a check of the effect by a second request. "Yes" means that the request works and has its effect. "Dropped" means that the provider answers 200 but does not keep the setting. Other cells give the HTTP status and the S3 error code.

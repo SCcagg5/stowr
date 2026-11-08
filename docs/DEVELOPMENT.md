@@ -76,6 +76,19 @@ cd src
 go test -count=1 -run TestVolume . -args -volume-dir=/mnt/nfs/stowr-tests
 ```
 
+## Conformance test of the access policy
+
+`test/conformance/run.sh` runs the ProcurAuth conformance runner against Stowr in Docker. It needs the ProcurAuth repository:
+set `PROCURAUTH_DIR` when the repository is not next to the checkout of Stowr. The workflow `.github/workflows/conformance.yml`
+runs it on a pull request that changes the access code. Refer to [CONFORMANCE.md](CONFORMANCE.md).
+
+```sh
+./test/conformance/run.sh
+```
+
+The Go tests of the access policy are in the files `src/access*_test.go`. They use a fake PDP in a test HTTP server. They need
+no network and no Docker.
+
 ## Filesystem-write check
 
 The program keeps no state on the local file system. Only the files of the volume backend (`src/volume_*.go`) write

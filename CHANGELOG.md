@@ -2,6 +2,55 @@
 
 This document uses ASD-STE100 Simplified Technical English.
 
+## Unreleased
+
+Stowr follows the protocol ProcurAuth for the access of people. The `access` block is mandatory again.
+
+### Changes
+
+- The `access` block is mandatory. A file without it stops the start. Its key `mode` is `authzen` or `open`. Mode `open`
+  checks no token and asks no PDP. Mode `authzen` needs the blocks `identity` and `pdp`.
+- ProcurAuth, mode `authzen`:
+  - The identity token: Stowr accepts `Ed25519` and `ES256` only, and refuses `EdDSA`. The keys are a JWK Set. The key
+    `clock_skew` is new.
+  - The PDP client: the default paths `/access/v1/evaluation` and `/access/v1/evaluations`, a usage question for the use of
+    each action that lists a budget, no retry, and an answer cache that `cache_ttl` bounds.
+  - The action document is at `/.well-known/procurauth/actions`. It publishes five actions: `object.read`, `object.write`,
+    `object.delete`, `object.lock` and `bucket.admin`.
+  - The resource tree is service, bucket, folder and subfolder. The node of a key is the deepest folder that holds it.
+  - The options route `/.well-known/procurauth/resources` lists the buckets and the folders that a person can see.
+  - The budget `writes`: each use of an action that changes objects takes one unit. A used budget gives `429 too_many_requests`
+    with `Retry-After`.
+  - The ceiling `max_object_size` bounds each object that an operation reads or writes. A size over it gives
+    `403 ceiling_exceeded`.
+  - The interface lists only the buckets where the person holds one action. `/api/list` gives the `access` of the node and a
+    navigation list of the folders on the path to a folder that the person can read.
+  - A route with no access rule gives 403. A PDP failure gives `503 pdp_unavailable`, never 403.
+- With `access.mode = "authzen"`, a volume follows no symbolic link in the path of a key. Each link gives
+  `403 volume_link_refused`.
+- The conformance test `test/conformance/run.sh` runs the series U of the ProcurAuth runner against Stowr in Docker. A workflow
+  runs it on a pull request. Refer to `docs/CONFORMANCE.md`.
+- The new document `docs/ACCESS.md` gives the access policy.
+
+### Upgrade steps from 0.1.2
+
+1. Add the `access` block to the configuration file. A file without it stops the start.
+2. To keep the behavior of 0.1.2, write `access { mode = "open" }` and keep the reverse proxy that authenticates the users.
+3. To use the access policy, write `mode = "authzen"` with the blocks `identity` and `pdp`. Refer to `docs/ACCESS.md`.
+4. In mode `authzen`, limit the network so that only the edge reaches Stowr.
+
+### Upgrade steps from the access block of 0.1.0
+
+1. Make the edge sign with `Ed25519`. Stowr refuses `EdDSA`. `ES256` stays valid.
+2. Give `public_keys` as a JWK Set (RFC 7517). Stowr accepts no PEM now.
+3. Read the action document at `/.well-known/procurauth/actions`. The path `/.well-known/access-actions` has no alias and
+   gives 404. Change the address in the edge.
+4. Make the grants again. The tree and the actions are new: `object.read`, `object.write`, `object.delete`, `object.lock` and
+   `bucket.admin` on a service, a bucket, a folder or a subfolder.
+5. Add `plain_http = true` to the `pdp` block when the PDP URL starts with `http://`. A URL with `https://` needs no key.
+6. Write each duration as one whole number and one unit: `ms`, `s`, `m` or `h`. For example `500ms` or `5m`.
+7. Check `usage_timeout` (default `2s`). It must not be less than `timeout`.
+
 ## 0.1.2 (2026-11-08)
 
 ### Changes

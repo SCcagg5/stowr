@@ -144,7 +144,7 @@ bucket "documents" {
   permissions = ["read", "write", "delete"]
 }</code></pre>
         <button class="copy" type="button" data-copy="cmd-config">Copy</button>
-        <p class="note">Save it as <code>config.hcl</code>. Stowr has no sign-in of its own: put a reverse proxy that signs your users in in front of it.</p>
+        <p class="note">Save it as <code>config.hcl</code>. Set the <code>access</code> block: mode <code>"authzen"</code> checks each request with your access policy; mode <code>"open"</code> needs a reverse proxy that signs your users in.</p>
       </div>
       <div class="step">
         <span class="n">3</span>
