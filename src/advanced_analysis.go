@@ -122,6 +122,10 @@ func (a *application) handleVersions(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
+		if _, err := a.authorizeUse(r, actionObjectDelete, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		if err := instance.DeleteVersion(r.Context(), instance.fullKey(key), strings.TrimSpace(r.URL.Query().Get("version"))); err != nil {
 			writeAPIError(w, err)
 			return
@@ -269,6 +273,10 @@ func (a *application) handleVersionRestore(w http.ResponseWriter, r *http.Reques
 	key := cleanRelativeKey(request.Key)
 	if key == "" || strings.TrimSpace(request.Version) == "" {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_version", Message: "key and version are required"})
+		return
+	}
+	if _, err := a.authorize(r, a.restoreOperation(instance, key)); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	if err := instance.RestoreVersion(r.Context(), instance.fullKey(key), request.Version); err != nil {

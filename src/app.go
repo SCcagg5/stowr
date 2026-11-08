@@ -665,6 +665,10 @@ func (a *application) handleCopy(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
+		if _, err := a.authorize(r, a.copyOperation(instance, source, target)); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		job, err := a.jobs.create(jobState{Type: jobTypeCopyPrefix, Instance: instance.cfg.ID, Source: source, Target: target})
 		if err != nil {
 			writeAPIError(w, err)
@@ -673,7 +677,16 @@ func (a *application) handleCopy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, job.public())
 		return
 	}
-	if job, started, err := a.startLargeCopy(r.Context(), instance, request.Source, request.Target, false); err != nil || started {
+	source, target, err := cleanObjectPair(request.Source, request.Target)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if _, err := a.authorize(r, a.copyOperation(instance, source, target)); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if job, started, err := a.startLargeCopy(r.Context(), instance, source, target, false); err != nil || started {
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -681,7 +694,7 @@ func (a *application) handleCopy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, job.public())
 		return
 	}
-	count, err := copyOrMove(r.Context(), instance, request.Source, request.Target, false, false)
+	count, err := copyOrMove(r.Context(), instance, source, target, false, false)
 	if err != nil {
 		writeAPIError(w, err)
 		return
@@ -716,6 +729,10 @@ func (a *application) handleRename(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
+		if _, err := a.authorize(r, a.moveOperation(instance, source, target)); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		job, err := a.jobs.create(jobState{Type: jobTypeMovePrefix, Instance: instance.cfg.ID, Source: source, Target: target})
 		if err != nil {
 			writeAPIError(w, err)
@@ -724,7 +741,16 @@ func (a *application) handleRename(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, job.public())
 		return
 	}
-	if job, started, err := a.startLargeCopy(r.Context(), instance, request.Source, request.Target, true); err != nil || started {
+	source, target, err := cleanObjectPair(request.Source, request.Target)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if _, err := a.authorize(r, a.moveOperation(instance, source, target)); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if job, started, err := a.startLargeCopy(r.Context(), instance, source, target, true); err != nil || started {
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -732,7 +758,7 @@ func (a *application) handleRename(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, job.public())
 		return
 	}
-	count, err := copyOrMove(r.Context(), instance, request.Source, request.Target, false, true)
+	count, err := copyOrMove(r.Context(), instance, source, target, false, true)
 	if err != nil {
 		writeAPIError(w, err)
 		return
@@ -769,6 +795,10 @@ func (a *application) handleDeletePrefix(w http.ResponseWriter, r *http.Request)
 	}
 	if prefix == "" {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_prefix", Message: "refusing to delete the whole bucket; prefix is required"})
+		return
+	}
+	if _, err := a.authorize(r, a.deletePrefixOperation(instance, prefix)); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	job, err := a.jobs.create(jobState{Type: jobTypeDeletePrefix, Instance: instance.cfg.ID, Prefix: prefix})
@@ -1137,6 +1167,11 @@ func (a *application) handleObjectGateway(w http.ResponseWriter, r *http.Request
 			writeGatewayError(w, err)
 			return
 		}
+		// The decision comes before the read of the body.
+		if _, err := a.authorizeUse(r, actionObjectWrite, instance, key); err != nil {
+			writeGatewayError(w, err)
+			return
+		}
 		putCtx := withUploadTags(r.Context(), tags)
 		var transfer *checksumTransfer
 		if digest != "" {
@@ -1154,6 +1189,10 @@ func (a *application) handleObjectGateway(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodDelete:
 		if err := requirePermission(instance, permissionDelete); err != nil {
+			writeGatewayError(w, err)
+			return
+		}
+		if _, err := a.authorizeUse(r, actionObjectDelete, instance, key); err != nil {
 			writeGatewayError(w, err)
 			return
 		}

@@ -190,9 +190,14 @@ type accessAsk struct {
 
 // accessOperation is the permissions of one operation. Others come first, without usage. Use comes last: it is the
 // permission that the operation uses, and a budget counts it.
+//
+// Continuation is true when the request continues a use that already took its unit: an upload chunk, an upload status,
+// a resume or a cancel, a read or a control of a job, a request of a SQLite session. The use of a continuation never
+// carries usage, even when its action lists a budget.
 type accessOperation struct {
-	Others []accessAsk
-	Use    accessAsk
+	Others       []accessAsk
+	Use          accessAsk
+	Continuation bool
 }
 
 // accessGrant is what the PDP gives for an operation: the ceilings, by action and by name.
@@ -238,7 +243,7 @@ func (a *application) authorizeReadMany(r *http.Request, instance *storageInstan
 //
 // The service asks the Others first, without usage. A refused Other stops the operation before the question of the
 // use. When the action of the use lists a budget, the use is one Access Evaluation with usage. Else the use goes in
-// the same batch as the Others.
+// the same batch as the Others. A continuation never asks usage: its use goes in the same batch as the Others.
 func (a *application) authorize(r *http.Request, op accessOperation) (accessGrant, error) {
 	if !a.config.Access.enforced() {
 		return accessGrant{}, nil
@@ -271,7 +276,7 @@ func (a *application) authorize(r *http.Request, op accessOperation) (accessGran
 	}
 
 	ctx := r.Context()
-	if !a.accessDoc.listsBudget(op.Use.Action) {
+	if op.Continuation || !a.accessDoc.listsBudget(op.Use.Action) {
 		asks := append(append([]accessAsk(nil), others...), op.Use)
 		answers := a.pdp.decide(ctx, request.RequestID, request.Subject, questionsOf(asks))
 		for index, ask := range asks {

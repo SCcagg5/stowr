@@ -1481,7 +1481,7 @@ func (m *jobManager) changeStatus(id, action string) (jobState, error) {
 	stored := m.jobs[id]
 	if stored == nil {
 		m.mu.Unlock()
-		return jobState{}, apiError{Status: http.StatusNotFound, Code: "job_not_found", Message: "job was not found"}
+		return jobState{}, errUnknownJob()
 	}
 	job := cloneJobState(*stored)
 	switch action {
@@ -1550,6 +1550,31 @@ func validatePrefixOperation(source, target string) (string, string, error) {
 	return source, target, nil
 }
 
+// errUnknownJob is the answer for a job that does not exist, for a job that has no access rule, and for a job that the
+// subject cannot do again. The three cases give the same answer.
+func errUnknownJob() apiError {
+	return apiError{Status: http.StatusNotFound, Code: "unknown_job", Message: "job was not found"}
+}
+
+// authorizeJob asks again the permissions of the operation that made the job, without usage. A refusal gives the same
+// answer as an unknown job. A failure of the PDP and a budget refusal keep their status.
+func (a *application) authorizeJob(r *http.Request, job jobState) error {
+	if !a.config.Access.enforced() {
+		return nil
+	}
+	op, ok := a.jobOperation(job)
+	if !ok {
+		return errUnknownJob()
+	}
+	if err := a.authorizeContinuation(r, op); err != nil {
+		if isForbiddenError(err) {
+			return errUnknownJob()
+		}
+		return err
+	}
+	return nil
+}
+
 func (a *application) handleJobs(w http.ResponseWriter, r *http.Request) {
 	if a.jobs == nil {
 		writeAPIError(w, fmt.Errorf("job manager is not initialized"))
@@ -1558,7 +1583,7 @@ func (a *application) handleJobs(w http.ResponseWriter, r *http.Request) {
 	remainder := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
 	parts := strings.Split(remainder, "/")
 	if len(parts) == 0 || parts[0] == "" {
-		writeAPIError(w, apiError{Status: http.StatusNotFound, Code: "job_not_found", Message: "job was not found"})
+		writeAPIError(w, errUnknownJob())
 		return
 	}
 	id := parts[0]
@@ -1569,7 +1594,11 @@ func (a *application) handleJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		job, ok := a.jobs.get(id)
 		if !ok {
-			writeAPIError(w, apiError{Status: http.StatusNotFound, Code: "job_not_found", Message: "job was not found"})
+			writeAPIError(w, errUnknownJob())
+			return
+		}
+		if err := a.authorizeJob(r, job); err != nil {
+			writeAPIError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, job.public())
@@ -1577,6 +1606,21 @@ func (a *application) handleJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) != 2 || r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	job, ok := a.jobs.get(id)
+	if !ok {
+		writeAPIError(w, errUnknownJob())
+		return
+	}
+	switch parts[1] {
+	case "pause", "resume", "cancel":
+	default:
+		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_job_action", Message: "unknown job action"})
+		return
+	}
+	if err := a.authorizeJob(r, job); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	job, err := a.jobs.changeStatus(id, parts[1])

@@ -687,10 +687,22 @@ func (a *application) handleMultipartAbort(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if len(request.Uploads) > 0 {
+		keys := make([]string, len(request.Uploads))
+		for index, item := range request.Uploads {
+			keys[index] = item.Key
+		}
+		if _, err := a.authorize(r, a.abortUploadsOperation(instance, keys)); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, a.abortSelectedMultiparts(r.Context(), instance, request.Uploads))
 		return
 	}
 	prefix := cleanRelativeKey(request.Prefix)
+	if _, err := a.authorize(r, a.writePrefixOperation(instance, prefix)); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	cutoff := time.Now().UTC().Add(-time.Duration(request.OlderThanDays) * 24 * time.Hour)
 	job, err := a.jobs.create(jobState{
 		Type: jobTypeAbortMultiparts, Instance: instance.cfg.ID, Prefix: prefix,

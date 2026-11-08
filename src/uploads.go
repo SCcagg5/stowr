@@ -396,7 +396,17 @@ func sameCompositeChecksum(reported, digest string, count int) bool {
 	return reported == digest
 }
 
+// accessCheck is the access check of a request that has a key: an upload request or a SQLite request. It gets the
+// instance and the key.
+type accessCheck func(instance *storageInstance, key string) error
+
 func (m *uploadManager) create(ctx context.Context, request createUploadRequest) (uploadSession, error) {
+	return m.createChecked(ctx, request, nil)
+}
+
+// createChecked creates an upload session. It calls check after the validation of the request and before the first
+// call to the storage. A nil check is a request without access rule.
+func (m *uploadManager) createChecked(ctx context.Context, request createUploadRequest, check accessCheck) (uploadSession, error) {
 	if !m.hasCapacityFor("") {
 		return uploadSession{}, uploadCapacityError()
 	}
@@ -428,6 +438,11 @@ func (m *uploadManager) create(ctx context.Context, request createUploadRequest)
 	ctx = withUploadTags(ctx, request.Tags)
 	if request.Checksum != "" && request.Checksum != uploadChecksumSHA256 {
 		return uploadSession{}, apiError{Status: http.StatusBadRequest, Code: "invalid_checksum", Message: `checksum must be "" or "sha256"`}
+	}
+	if check != nil {
+		if err := check(instance, key); err != nil {
+			return uploadSession{}, err
+		}
 	}
 	now := time.Now().UTC()
 	upload := uploadSession{
@@ -499,12 +514,23 @@ type resumeUploadRequest struct {
 }
 
 func (m *uploadManager) resume(ctx context.Context, token string) (uploadSession, error) {
+	return m.resumeChecked(ctx, token, nil)
+}
+
+// resumeChecked gives the state of an upload from its resume token. It calls check before the first read of the
+// session and of the storage. The instance and the key come from the sealed token, never from the client.
+func (m *uploadManager) resumeChecked(ctx context.Context, token string, check accessCheck) (uploadSession, error) {
 	descriptor, instance, err := m.app.openUploadResumeToken(token)
 	if err != nil {
 		return uploadSession{}, err
 	}
 	if err := requirePermission(instance, permissionWrite); err != nil {
 		return uploadSession{}, err
+	}
+	if check != nil {
+		if err := check(instance, descriptor.Key); err != nil {
+			return uploadSession{}, err
+		}
 	}
 	id := uploadIDFromResumeToken(token)
 	if existing, ok := m.get(id); ok {
@@ -999,7 +1025,7 @@ func (a *application) handleUploads(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
-		upload, err := a.uploads.resume(r.Context(), request.ResumeToken)
+		upload, err := a.uploads.resumeChecked(r.Context(), request.ResumeToken, a.uploadAuthorizer(r, true))
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -1022,7 +1048,7 @@ func (a *application) handleUploads(w http.ResponseWriter, r *http.Request) {
 		if request.Instance == "" {
 			request.Instance = r.URL.Query().Get("instance")
 		}
-		upload, err := a.uploads.create(r.Context(), request)
+		upload, err := a.uploads.createChecked(r.Context(), request, a.uploadAuthorizer(r, false))
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -1034,7 +1060,7 @@ func (a *application) handleUploads(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "resume_token_required", Message: "upload resume token is required"})
 			return
 		}
-		upload, err := a.uploads.resume(r.Context(), token)
+		upload, err := a.uploads.resumeChecked(r.Context(), token, a.uploadAuthorizer(r, true))
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -1046,7 +1072,7 @@ func (a *application) handleUploads(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "resume_token_required", Message: "upload resume token is required"})
 			return
 		}
-		upload, err := a.uploads.resume(r.Context(), token)
+		upload, err := a.uploads.resumeChecked(r.Context(), token, a.uploadAuthorizer(r, true))
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -1063,7 +1089,7 @@ func (a *application) handleUploads(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "resume_token_required", Message: "upload resume token is required"})
 			return
 		}
-		upload, err := a.uploads.resume(r.Context(), token)
+		upload, err := a.uploads.resumeChecked(r.Context(), token, a.uploadAuthorizer(r, true))
 		if err != nil {
 			writeAPIError(w, err)
 			return

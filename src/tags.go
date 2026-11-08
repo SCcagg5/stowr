@@ -553,6 +553,10 @@ func (a *application) handleTags(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
+		if _, err := a.authorizeUse(r, actionObjectWrite, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		tags := applyTagChange(nil, tagChange{Add: request.Tags})
 		version := strings.TrimSpace(request.Version)
 		if err := instance.PutTags(r.Context(), instance.fullKey(key), version, tags); err != nil {
@@ -611,6 +615,10 @@ func (a *application) handleTagsBulk(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_tags", Message: "a key to remove cannot be empty"})
 			return
 		}
+	}
+	if _, err := a.authorize(r, a.writePrefixOperation(instance, prefix)); err != nil {
+		writeAPIError(w, err)
+		return
 	}
 	job, err := a.jobs.create(jobState{
 		Type: jobTypeTagPrefix, Instance: instance.cfg.ID, Prefix: prefix,

@@ -694,6 +694,10 @@ func (a *application) handleObjectLock(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
+		if _, err := a.authorizeUse(r, actionObjectLock, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		if err := instance.ChangeObjectLock(r.Context(), instance.fullKey(key), request.Version, change); err != nil {
 			writeAPIError(w, err)
 			return

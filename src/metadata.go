@@ -518,6 +518,10 @@ func (a *application) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if _, err := a.authorizeUse(r, actionObjectWrite, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		metadata := metadataRequestHeaders(request.Headers, request.Metadata)
 		if err := instance.ReplaceMetadata(r.Context(), instance.fullKey(key), version, request.ETag, modified, metadata); err != nil {
 			writeAPIError(w, err)

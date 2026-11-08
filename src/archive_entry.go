@@ -244,6 +244,10 @@ func (a *application) handleArchiveExtract(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_archive", Message: "archive key is required"})
 		return
 	}
+	if _, err := a.authorize(r, a.extractOperation(source, request.Key, target, request.Target)); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	job, err := a.jobs.create(jobState{
 		Type: jobTypeExtractArchive, Instance: source.cfg.ID, TargetInstance: target.cfg.ID,
 		Source: request.Key, Version: request.Version, Target: request.Target, Entries: request.Entries,

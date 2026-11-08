@@ -251,13 +251,15 @@ func (m *sqliteSessionManager) remove(id string) bool {
 	return ok
 }
 
-func (m *sqliteSessionManager) create(ctx context.Context, request sqliteSessionRequest) (*sqliteSession, error) {
+// create opens a session. It calls check after the validation of the request and before the first call to the
+// storage. A nil check is a request without access rule.
+func (m *sqliteSessionManager) create(ctx context.Context, request sqliteSessionRequest, check accessCheck) (*sqliteSession, error) {
 	if m == nil || m.app == nil {
 		return nil, apiError{Status: http.StatusServiceUnavailable, Code: "sqlite_unavailable", Message: "SQLite preview is unavailable"}
 	}
 	instance := m.app.instances[strings.TrimSpace(request.Instance)]
 	if instance == nil {
-		return nil, apiError{Status: http.StatusBadRequest, Code: "unknown_instance", Message: "unknown storage instance"}
+		return nil, apiError{Status: http.StatusNotFound, Code: "unknown_instance", Message: "unknown storage instance"}
 	}
 	if err := requirePermission(instance, permissionRead); err != nil {
 		return nil, err
@@ -268,6 +270,11 @@ func (m *sqliteSessionManager) create(ctx context.Context, request sqliteSession
 	}
 	if request.Size > maxSQLitePreviewBytes {
 		return nil, apiError{Status: http.StatusRequestEntityTooLarge, Code: "sqlite_too_large", Message: fmt.Sprintf("SQLite previews are limited to %d GiB", maxSQLitePreviewBytes>>30)}
+	}
+	if check != nil {
+		if err := check(instance, key); err != nil {
+			return nil, err
+		}
 	}
 
 	source, err := openObjectRangeSource(ctx, instance, key)
@@ -381,7 +388,7 @@ func (a *application) handleSQLiteSessions(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_json", Message: "invalid SQLite preview request"})
 		return
 	}
-	session, err := a.sqlite.create(r.Context(), request)
+	session, err := a.sqlite.create(r.Context(), request, a.sqliteAuthorizer(r))
 	if err != nil {
 		writeAPIError(w, err)
 		return
@@ -422,6 +429,10 @@ func (a *application) handleSQLiteSessionResource(w http.ResponseWriter, r *http
 	}
 	id := parts[0]
 	if r.Method == http.MethodDelete && len(parts) == 1 {
+		if err := a.authorizeSQLiteSession(r, id); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		if !a.sqlite.remove(id) {
 			writeAPIError(w, apiError{Status: http.StatusNotFound, Code: "sqlite_session_not_found", Message: "SQLite preview session was not found"})
 			return
@@ -432,6 +443,10 @@ func (a *application) handleSQLiteSessionResource(w http.ResponseWriter, r *http
 	session, ok := a.sqlite.get(id)
 	if !ok {
 		writeAPIError(w, apiError{Status: http.StatusNotFound, Code: "sqlite_session_not_found", Message: "SQLite preview session was not found or expired"})
+		return
+	}
+	if err := a.authorizeSQLiteSessionOf(r, session); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	if r.Method == http.MethodGet && len(parts) == 1 {
@@ -465,4 +480,47 @@ func maxInt(left, right int) int {
 		return left
 	}
 	return right
+}
+
+// sqliteAuthorizer gives the check of the creation of a session: object.read on the node of the key. A read lists no
+// budget, so the question carries no usage.
+func (a *application) sqliteAuthorizer(r *http.Request) accessCheck {
+	return func(instance *storageInstance, key string) error {
+		_, err := a.authorizeRead(r, instance, key)
+		return err
+	}
+}
+
+// authorizeSQLiteSessionOf asks object.read again on the node of the key of a session. The instance and the key come
+// from the session, never from the client. A refusal gives the answer of an unknown session. A failure of the PDP keeps
+// its status.
+func (a *application) authorizeSQLiteSessionOf(r *http.Request, session *sqliteSession) error {
+	if !a.config.Access.enforced() {
+		return nil
+	}
+	instance := a.instances[session.Instance]
+	if instance == nil {
+		return errUnknownSQLiteSession()
+	}
+	if err := a.authorizeContinuation(r, a.useOperation(actionObjectRead, instance, session.Key)); err != nil {
+		if isForbiddenError(err) {
+			return errUnknownSQLiteSession()
+		}
+		return err
+	}
+	return nil
+}
+
+// authorizeSQLiteSession finds the session by its id and asks object.read again on the node of its key. An unknown
+// session gives the 404 answer without a question.
+func (a *application) authorizeSQLiteSession(r *http.Request, id string) error {
+	session, ok := a.sqlite.get(id)
+	if !ok {
+		return errUnknownSQLiteSession()
+	}
+	return a.authorizeSQLiteSessionOf(r, session)
+}
+
+func errUnknownSQLiteSession() apiError {
+	return apiError{Status: http.StatusNotFound, Code: "sqlite_session_not_found", Message: "SQLite preview session was not found"}
 }

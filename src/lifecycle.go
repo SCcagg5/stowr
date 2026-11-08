@@ -1586,6 +1586,10 @@ func (a *application) handleLifecycleSave(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	if _, err := a.authorize(r, a.lifecycleOperation(instance)); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	state, warnings, err := instance.SaveLifecycle(r.Context(), request.Hash, request.Rules)
 	if err != nil {
 		writeAPIError(w, err)
