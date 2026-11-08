@@ -103,6 +103,10 @@ func (a *application) handleArchiveEntry(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_archive_entry", Message: "archive key and entry are required"})
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	listed := mediaSourceMetadata{
 		Size:         parseInt64Default(r.URL.Query().Get("size"), 0),
 		ETag:         strings.TrimSpace(r.URL.Query().Get("etag")),
@@ -278,6 +282,10 @@ func (a *application) handleArchiveEntryIntegrity(w http.ResponseWriter, r *http
 	request.Entry = strings.TrimSpace(request.Entry)
 	if request.Key == "" || request.Entry == "" {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_archive_entry", Message: "archive key and entry are required"})
+		return
+	}
+	if _, err := a.authorizeRead(r, instance, request.Key); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	payload := request.archiveEntryIntegrityRequest

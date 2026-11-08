@@ -95,6 +95,10 @@ func (a *application) handleParquetPreview(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "missing_key", Message: "key is required"})
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	knownSize, err := parseOptionalObjectSize(r.URL.Query().Get("size"))
 	if err != nil {
 		writeAPIError(w, err)

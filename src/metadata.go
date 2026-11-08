@@ -466,6 +466,10 @@ func (a *application) handleMetadata(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key is required"})
 			return
 		}
+		if _, err := a.authorizeRead(r, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		if !instance.metadataEditAvailable() {
 			writeAPIError(w, metadataEditUnsupported())
 			return

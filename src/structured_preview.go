@@ -155,6 +155,10 @@ func (a *application) handleStructuredPreview(w http.ResponseWriter, r *http.Req
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key cannot be empty"})
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	extension := strings.ToLower(strings.TrimPrefix(path.Ext(key), "."))
 	contentType := strings.TrimSpace(r.URL.Query().Get("mime"))
 	listed := mediaSourceMetadata{
@@ -241,6 +245,10 @@ func (a *application) handleArchivePreview(w http.ResponseWriter, r *http.Reques
 	key := cleanRelativeKey(r.URL.Query().Get("key"))
 	if key == "" {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key cannot be empty"})
+		return
+	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	extension := strings.ToLower(strings.TrimPrefix(path.Ext(key), "."))

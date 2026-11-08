@@ -100,6 +100,10 @@ func (a *application) handleVersions(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
+		if _, err := a.authorizeRead(r, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		maximum := int(parseInt64Default(r.URL.Query().Get("max"), 250))
 		if maximum < 1 || maximum > 1000 {
 			maximum = 250
@@ -165,8 +169,7 @@ func (a *application) handleVersionCounts(w http.ResponseWriter, r *http.Request
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_keys", Message: "between 1 and 100 object keys are required"})
 		return
 	}
-	counts := make(map[string]versionCountResult, len(request.Keys))
-	errorsByKey := make(map[string]string)
+	keys := make([]string, 0, len(request.Keys))
 	seen := make(map[string]struct{}, len(request.Keys))
 	for _, rawKey := range request.Keys {
 		key := cleanRelativeKey(rawKey)
@@ -177,6 +180,16 @@ func (a *application) handleVersionCounts(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	// The first key is the use. The other keys are the other permissions.
+	if _, err := a.authorizeReadMany(r, instance, keys); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	counts := make(map[string]versionCountResult, len(keys))
+	errorsByKey := make(map[string]string)
+	for _, key := range keys {
 		count, current, err := countObjectVersions(r.Context(), instance, instance.fullKey(key))
 		if err != nil {
 			errorsByKey[key] = publicStorageError(err)
@@ -292,6 +305,10 @@ func (a *application) handleIntegrity(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_integrity_request", Message: "an object key is required"})
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, request.Key); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	job, err := a.jobs.create(jobState{Type: jobTypeIntegrity, Instance: instance.cfg.ID, IntegrityRequest: &request.integrityRequest})
 	if err != nil {
 		writeAPIError(w, err)
@@ -330,6 +347,10 @@ func (a *application) handleInspect(w http.ResponseWriter, r *http.Request) {
 	version := strings.TrimSpace(r.URL.Query().Get("version"))
 	if key == "" {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key is required"})
+		return
+	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	budget := budgetFromContext(r.Context())

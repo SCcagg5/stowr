@@ -35,6 +35,10 @@ func (a *application) handleArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix := normalizePrefix(cleanRelativeKey(r.URL.Query().Get("prefix")))
+	if _, err := a.authorizeRead(r, instance, prefix); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	page, err := instance.List(r.Context(), listOptions{
 		Prefix: instance.fullKey(prefix), MaxResults: 1000,
 	})

@@ -278,9 +278,3 @@ func serveAccessActions(w http.ResponseWriter, r *http.Request, cfg accessConfig
 		_, _ = w.Write(body)
 	}
 }
-
-// The coordinator adds this method after the field accessDoc exists in the application struct:
-//
-//	func (a *application) handleAccessActions(w http.ResponseWriter, r *http.Request) {
-//		serveAccessActions(w, r, a.config.Access, a.accessDoc)
-//	}

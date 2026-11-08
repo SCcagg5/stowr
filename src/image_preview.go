@@ -31,6 +31,10 @@ func (a *application) handleImagePreview(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "image key cannot be empty"})
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	extension := strings.ToLower(strings.TrimPrefix(filepath.Ext(key), "."))
 
 	// RAW/TIFF containers often carry a camera-generated JPEG preview. Reading

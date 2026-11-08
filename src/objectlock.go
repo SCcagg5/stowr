@@ -652,6 +652,10 @@ func (a *application) handleObjectLock(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key is required"})
 			return
 		}
+		if _, err := a.authorizeRead(r, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		version := strings.TrimSpace(r.URL.Query().Get("version"))
 		if version != "" && !validVersionID(version) {
 			writeAPIError(w, invalidObjectLock("version must be the id of a version of the object"))

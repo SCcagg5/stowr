@@ -169,6 +169,9 @@ func (a *application) delimitedObjectFromRequest(r *http.Request) (*storageInsta
 	if key == "" {
 		return nil, "", "", apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "delimited object key cannot be empty"}
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		return nil, "", "", err
+	}
 	return instance, key, strings.TrimSpace(r.URL.Query().Get("etag")), nil
 }
 
@@ -355,6 +358,10 @@ func (a *application) handleDocumentCount(w http.ResponseWriter, r *http.Request
 	key := cleanRelativeKey(r.URL.Query().Get("key"))
 	if key == "" {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key cannot be empty"})
+		return
+	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
 		return
 	}
 	extension := strings.ToLower(strings.TrimPrefix(filepath.Ext(key), "."))

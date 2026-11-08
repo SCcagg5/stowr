@@ -518,6 +518,10 @@ func (a *application) handleTags(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key is required"})
 			return
 		}
+		if _, err := a.authorizeRead(r, instance, key); err != nil {
+			writeAPIError(w, err)
+			return
+		}
 		version := strings.TrimSpace(r.URL.Query().Get("version"))
 		tags, err := instance.GetTags(r.Context(), instance.fullKey(key), version)
 		if err != nil {
@@ -674,6 +678,10 @@ func (a *application) handleLifecycle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := requirePermission(instance, permissionRead); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if _, err := a.authorizeReadBucket(r, instance); err != nil {
 		writeAPIError(w, err)
 		return
 	}

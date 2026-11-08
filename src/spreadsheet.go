@@ -159,6 +159,10 @@ func (a *application) handleSpreadsheet(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "spreadsheet key cannot be empty"})
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	extension := strings.ToLower(strings.TrimPrefix(filepath.Ext(key), "."))
 	if extension != "xlsx" && extension != "xlsm" {
 		writeAPIError(w, apiError{Status: http.StatusBadRequest, Code: "unsupported_spreadsheet", Message: "server-side spreadsheet preview supports XLSX and XLSM files"})

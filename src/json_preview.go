@@ -179,6 +179,9 @@ func (a *application) jsonObjectFromRequest(r *http.Request) (*storageInstance, 
 	if key == "" {
 		return nil, "", "", apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "JSON object key cannot be empty"}
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		return nil, "", "", err
+	}
 	return instance, key, strings.TrimSpace(r.URL.Query().Get("etag")), nil
 }
 

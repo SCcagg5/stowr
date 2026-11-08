@@ -515,6 +515,10 @@ func (a *application) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, err)
 		return
 	}
+	if _, err := a.authorizeReadBucket(r, instance); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	if !instance.usageAvailable() {
 		writeJSON(w, http.StatusOK, map[string]bool{"supported": false})

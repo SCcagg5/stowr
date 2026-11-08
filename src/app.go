@@ -37,6 +37,10 @@ type application struct {
 	uploads         *uploadManager
 	sqlite          *sqliteSessionManager
 	resumeTokenKey  [32]byte
+	// identity, pdp and accessDoc are set in mode authzen. accessDoc is the zero value in mode open.
+	identity  *identityVerifier
+	pdp       *pdpClient
+	accessDoc accessDocument
 }
 
 func newApplication(cfg appConfig) (*application, error) {
@@ -44,12 +48,17 @@ func newApplication(cfg appConfig) (*application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open embedded interface: %w", err)
 	}
+	accessDoc, err := buildAccessDocument(cfg)
+	if err != nil {
+		return nil, err
+	}
 	concurrency := newStorageConcurrency(cfg.Runtime.MaxConcurrentStorageRequests)
 	app := &application{
 		config:          cfg,
 		authentications: make(map[string]*sharedAuthentication, len(cfg.Authentications)),
 		instances:       make(map[string]*storageInstance, len(cfg.Buckets)+len(cfg.Volumes)),
 		publicFS:        publicFS,
+		accessDoc:       accessDoc,
 	}
 	if _, err := rand.Read(app.resumeTokenKey[:]); err != nil {
 		return nil, fmt.Errorf("generate upload resume token key: %w", err)
@@ -97,6 +106,10 @@ func newApplication(cfg appConfig) (*application, error) {
 	}
 	app.uploads = uploads
 	app.sqlite = newSQLiteSessionManager(app)
+	if cfg.Access.enforced() {
+		app.identity = newIdentityVerifier(cfg.Access)
+		app.pdp = newPDPClient(cfg.Access, cfg.Runtime.LogMode == logModeDetailed)
+	}
 	return app, nil
 }
 
@@ -175,78 +188,107 @@ func (a *application) close() {
 	if a.jobs != nil {
 		a.jobs.close()
 	}
+	a.pdp.close()
 	a.closeAuthentications()
 }
 
+// routes builds the HTTP handler of the service from the route table.
 func (a *application) routes() http.Handler {
+	return a.routesFor(a.routeTable())
+}
+
+// routesFor registers each entry of the table. The gateway /s3 and the pages /-/ stay before the mux: the mux would
+// clean the escaped bytes of an object key.
+func (a *application) routesFor(entries []routeEntry) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/instances", a.handleInstances)
-	mux.HandleFunc("/api/build", a.handleBuild)
-	mux.HandleFunc("/api/permissions/refresh", a.handlePermissionRefresh)
-	mux.HandleFunc("/api/list", a.handleList)
-	mux.HandleFunc("/api/stats", a.handleStats)
-	mux.HandleFunc("/api/archive", a.handleArchive)
-	mux.HandleFunc("/api/copy", a.handleCopy)
-	mux.HandleFunc("/api/rename", a.handleRename)
-	mux.HandleFunc("/api/delete-prefix", a.handleDeletePrefix)
-	mux.HandleFunc("/api/tags", a.handleTags)
-	mux.HandleFunc("/api/tags/bulk", a.handleTagsBulk)
-	mux.HandleFunc("/api/metadata", a.handleMetadata)
-	mux.HandleFunc("/api/lifecycle", a.handleLifecycle)
-	mux.HandleFunc("/api/encryption", a.handleEncryption)
-	mux.HandleFunc("/api/usage", a.handleUsage)
-	mux.HandleFunc("/api/object-lock", a.handleObjectLock)
-	mux.HandleFunc("/api/multiparts", a.handleMultiparts)
-	mux.HandleFunc("/api/multiparts/abort", a.handleMultipartAbort)
-	mux.HandleFunc("/api/jobs", http.NotFound)
-	mux.HandleFunc("/api/jobs/", a.handleJobs)
-	mux.HandleFunc("/api/uploads/resume", a.handleUploads)
-	mux.HandleFunc("/api/uploads", a.handleUploads)
-	mux.HandleFunc("/api/spreadsheet", a.handleSpreadsheet)
-	mux.HandleFunc("/api/delimited", a.handleDelimitedPage)
-	mux.HandleFunc("/api/document-count", a.handleDocumentCount)
-	mux.HandleFunc("/api/document/word", a.handleWordPreview)
-	mux.HandleFunc("/api/parquet", a.handleParquetPreview)
-	mux.HandleFunc("/api/sqlite/sessions", a.handleSQLiteSessions)
-	mux.HandleFunc("/api/sqlite/sessions/", a.handleSQLiteSessions)
-	mux.HandleFunc("/api/json/raw", a.handleJSONRaw)
-	mux.HandleFunc("/api/json/beautify", a.handleJSONBeautify)
-	mux.HandleFunc("/api/json/summary", a.handleJSONSummary)
-	mux.HandleFunc("/api/json/tree", a.handleJSONTree)
-	mux.HandleFunc("/api/search", a.handleDocumentSearch)
-	mux.HandleFunc("/api/media-info", a.handleMediaInfo)
-	mux.HandleFunc("/api/structured-preview", a.handleStructuredPreview)
-	mux.HandleFunc("/api/archive-preview", a.handleArchivePreview)
-	mux.HandleFunc("/api/archive-entry", a.handleArchiveEntry)
-	mux.HandleFunc("/api/archive-entry/integrity", a.handleArchiveEntryIntegrity)
-	mux.HandleFunc("/api/archive-extract", a.handleArchiveExtract)
-	mux.HandleFunc("/api/versions", a.handleVersions)
-	mux.HandleFunc("/api/version-counts", a.handleVersionCounts)
-	mux.HandleFunc("/api/versions/restore", a.handleVersionRestore)
-	mux.HandleFunc("/api/integrity", a.handleIntegrity)
-	mux.HandleFunc("/api/inspect", a.handleInspect)
-	mux.HandleFunc("/api/image-preview", a.handleImagePreview)
-	mux.HandleFunc("/healthz", a.handleHealth)
-	mux.HandleFunc("/open/", a.handleOpenOriginal)
-	mux.Handle("/", secureStaticHandler(a.publicFS))
+	var gateway, frontend http.Handler
+	for _, entry := range entries {
+		handler := a.guardRoute(entry)
+		switch entry.pattern {
+		case "/s3":
+			gateway = handler
+		case "/-/":
+			frontend = handler
+		default:
+			mux.Handle(entry.pattern, handler)
+		}
+	}
 	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if version := strings.TrimSpace(r.URL.Query().Get("version")); version != "" {
 			r = r.WithContext(withObjectVersion(r.Context(), version))
 		}
 		// Object keys are opaque. Route the gateway before ServeMux so escaped
 		// key bytes are not canonicalized as URL path segments.
-		if r.URL.Path == "/s3" {
-			a.handleObjectGateway(w, r)
+		if r.URL.Path == "/s3" && gateway != nil {
+			gateway.ServeHTTP(w, r)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/-/") {
-			a.handleStorageFrontend(w, r)
+		if strings.HasPrefix(r.URL.Path, "/-/") && frontend != nil {
+			frontend.ServeHTTP(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
 	})
-	internal := requestLogMiddleware(a.config.Runtime.LogMode, requestBudgetMiddleware(a.config.Runtime, sameOriginMutationMiddleware(gzipJSONMiddleware(router))))
+	internal := requestLogMiddleware(a.config.Runtime.LogMode, a.accessMiddleware(requestBudgetMiddleware(a.config.Runtime, sameOriginMutationMiddleware(gzipJSONMiddleware(router)))))
 	return securityHeadersMiddleware(internal)
+}
+
+// routeTable gives the routes of the service, each with its kind of access. A route that has no kind is denied.
+func (a *application) routeTable() []routeEntry {
+	return []routeEntry{
+		{"/s3", routeHandlerAsks, a.handleObjectGateway},
+		{"/-/", routeTokenOnly, a.handleStorageFrontend},
+		{"/api/instances", routeTokenOnly, a.handleInstances},
+		{"/api/build", routeTokenOnly, a.handleBuild},
+		{"/api/permissions/refresh", routeHandlerAsks, a.handlePermissionRefresh},
+		{"/api/list", routeHandlerAsks, a.handleList},
+		{"/api/stats", routeHandlerAsks, a.handleStats},
+		{"/api/archive", routeHandlerAsks, a.handleArchive},
+		{"/api/copy", routeHandlerAsks, a.handleCopy},
+		{"/api/rename", routeHandlerAsks, a.handleRename},
+		{"/api/delete-prefix", routeHandlerAsks, a.handleDeletePrefix},
+		{"/api/tags", routeHandlerAsks, a.handleTags},
+		{"/api/tags/bulk", routeHandlerAsks, a.handleTagsBulk},
+		{"/api/metadata", routeHandlerAsks, a.handleMetadata},
+		{"/api/lifecycle", routeHandlerAsks, a.handleLifecycle},
+		{"/api/encryption", routeHandlerAsks, a.handleEncryption},
+		{"/api/usage", routeHandlerAsks, a.handleUsage},
+		{"/api/object-lock", routeHandlerAsks, a.handleObjectLock},
+		{"/api/multiparts", routeHandlerAsks, a.handleMultiparts},
+		{"/api/multiparts/abort", routeHandlerAsks, a.handleMultipartAbort},
+		{"/api/jobs", routeTokenOnly, http.NotFound},
+		{"/api/jobs/", routeHandlerAsks, a.handleJobs},
+		{"/api/uploads/resume", routeHandlerAsks, a.handleUploads},
+		{"/api/uploads", routeHandlerAsks, a.handleUploads},
+		{"/api/spreadsheet", routeHandlerAsks, a.handleSpreadsheet},
+		{"/api/delimited", routeHandlerAsks, a.handleDelimitedPage},
+		{"/api/document-count", routeHandlerAsks, a.handleDocumentCount},
+		{"/api/document/word", routeHandlerAsks, a.handleWordPreview},
+		{"/api/parquet", routeHandlerAsks, a.handleParquetPreview},
+		{"/api/sqlite/sessions", routeHandlerAsks, a.handleSQLiteSessions},
+		{"/api/sqlite/sessions/", routeHandlerAsks, a.handleSQLiteSessions},
+		{"/api/json/raw", routeHandlerAsks, a.handleJSONRaw},
+		{"/api/json/beautify", routeHandlerAsks, a.handleJSONBeautify},
+		{"/api/json/summary", routeHandlerAsks, a.handleJSONSummary},
+		{"/api/json/tree", routeHandlerAsks, a.handleJSONTree},
+		{"/api/search", routeHandlerAsks, a.handleDocumentSearch},
+		{"/api/media-info", routeHandlerAsks, a.handleMediaInfo},
+		{"/api/structured-preview", routeHandlerAsks, a.handleStructuredPreview},
+		{"/api/archive-preview", routeHandlerAsks, a.handleArchivePreview},
+		{"/api/archive-entry", routeHandlerAsks, a.handleArchiveEntry},
+		{"/api/archive-entry/integrity", routeHandlerAsks, a.handleArchiveEntryIntegrity},
+		{"/api/archive-extract", routeHandlerAsks, a.handleArchiveExtract},
+		{"/api/versions", routeHandlerAsks, a.handleVersions},
+		{"/api/version-counts", routeHandlerAsks, a.handleVersionCounts},
+		{"/api/versions/restore", routeHandlerAsks, a.handleVersionRestore},
+		{"/api/integrity", routeHandlerAsks, a.handleIntegrity},
+		{"/api/inspect", routeHandlerAsks, a.handleInspect},
+		{"/api/image-preview", routeHandlerAsks, a.handleImagePreview},
+		{"/healthz", routeExempt, a.handleHealth},
+		{accessActionsPath, routeExempt, a.handleAccessActions},
+		{"/open/", routeHandlerAsks, a.handleOpenOriginal},
+		{"/", routeTokenOnly, secureStaticHandler(a.publicFS).ServeHTTP},
+	}
 }
 
 func (a *application) handleInstances(w http.ResponseWriter, r *http.Request) {
@@ -288,6 +330,10 @@ func (a *application) handlePermissionRefresh(w http.ResponseWriter, r *http.Req
 	}
 	instance, err := a.instanceFromRequest(r, "")
 	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if _, err := a.authorizeReadBucket(r, instance); err != nil {
 		writeAPIError(w, err)
 		return
 	}
@@ -372,6 +418,10 @@ func (a *application) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := cleanRelativeKey(r.URL.Query().Get("prefix"))
 	if err := requirePermission(instance, permissionRead); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if _, err := a.authorizeRead(r, instance, prefix); err != nil {
 		writeAPIError(w, err)
 		return
 	}
@@ -550,6 +600,10 @@ func (a *application) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := normalizePrefix(cleanRelativeKey(r.URL.Query().Get("prefix")))
 	if err := requirePermission(instance, permissionRead); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	if _, err := a.authorizeRead(r, instance, prefix); err != nil {
 		writeAPIError(w, err)
 		return
 	}
@@ -895,6 +949,10 @@ func (a *application) handleOpenOriginal(w http.ResponseWriter, r *http.Request)
 		writeGatewayError(w, apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: "object key cannot be empty"})
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, key); err != nil {
+		writeGatewayError(w, err)
+		return
+	}
 	fullKey := instance.fullKey(key)
 	version := strings.TrimSpace(r.URL.Query().Get("version"))
 	filename := path.Base(key)
@@ -1008,6 +1066,10 @@ func (a *application) handleObjectGateway(w http.ResponseWriter, r *http.Request
 			writeGatewayError(w, err)
 			return
 		}
+		if _, err := a.authorizeRead(r, instance, key); err != nil {
+			writeGatewayError(w, err)
+			return
+		}
 		if rangeOnly && !isBoundedPreviewRange(r.Header.Get("Range"), 16<<20) {
 			w.Header().Set("Accept-Ranges", "bytes")
 			w.Header().Set("Cache-Control", "private, no-store")
@@ -1037,6 +1099,10 @@ func (a *application) handleObjectGateway(w http.ResponseWriter, r *http.Request
 		_, _ = copyStream(w, response.Body)
 	case http.MethodHead:
 		if err := requirePermission(instance, permissionRead); err != nil {
+			writeGatewayError(w, err)
+			return
+		}
+		if _, err := a.authorizeRead(r, instance, key); err != nil {
 			writeGatewayError(w, err)
 			return
 		}
@@ -1281,6 +1347,10 @@ func (a *application) handleRawList(w http.ResponseWriter, r *http.Request, inst
 	}
 	query := r.URL.Query()
 	if err := requirePermission(instance, permissionRead); err != nil {
+		writeGatewayError(w, err)
+		return
+	}
+	if _, err := a.authorizeRead(r, instance, cleanRelativeKey(query.Get("prefix"))); err != nil {
 		writeGatewayError(w, err)
 		return
 	}
@@ -1594,6 +1664,10 @@ type apiError struct {
 	Status  int
 	Code    string
 	Message string
+	// Action is the action of an access refusal. The JSON error object shows it.
+	Action string
+	// RetryAfter is the wait in seconds. A value above 0 gives the header Retry-After.
+	RetryAfter int64
 }
 
 func (e apiError) Error() string { return e.Message }
@@ -1620,10 +1694,18 @@ func writeAPIError(w http.ResponseWriter, err error) {
 	code := "storage_error"
 	message := publicStorageError(err)
 	var apiErr apiError
+	body := map[string]any{}
 	if errors.As(err, &apiErr) {
 		status = apiErr.Status
 		code = apiErr.Code
 		message = apiErr.Message
+		if apiErr.Action != "" {
+			body["action"] = apiErr.Action
+		}
+		if code == codeTooManyRequests || code == codePDPUnavailable {
+			body["retryable"] = true
+		}
+		setRetryAfter(w, apiErr.RetryAfter)
 	} else {
 		var upstream *upstreamError
 		if errors.As(err, &upstream) {
@@ -1632,7 +1714,9 @@ func writeAPIError(w http.ResponseWriter, err error) {
 			}
 		}
 	}
-	writeJSON(w, status, map[string]any{"error": map[string]any{"code": code, "message": message}})
+	body["code"] = code
+	body["message"] = message
+	writeJSON(w, status, map[string]any{"error": body})
 }
 
 func writeGatewayError(w http.ResponseWriter, err error) {
@@ -1646,8 +1730,16 @@ func writeGatewayError(w http.ResponseWriter, err error) {
 	if errors.As(err, &apiErr) {
 		status = apiErr.Status
 		message = apiErr.Message
+		setRetryAfter(w, apiErr.RetryAfter)
 	}
 	http.Error(w, message, status)
+}
+
+// setRetryAfter sets the header Retry-After when the wait is above 0 seconds.
+func setRetryAfter(w http.ResponseWriter, seconds int64) {
+	if seconds > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -1959,13 +2051,18 @@ func requestLogMiddleware(mode string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		recorder := &statusRecorder{ResponseWriter: w}
-		next.ServeHTTP(recorder, r)
+		info := &requestLogInfo{}
+		next.ServeHTTP(recorder, r.WithContext(context.WithValue(r.Context(), requestLogKey{}, info)))
 		status := recorder.status
 		if status == 0 {
 			status = http.StatusOK
 		}
 		loggedPath := loggedRequestPath(mode, r.URL.Path)
 		// %q keeps a decoded %0A or other control byte in the path from forging log lines.
+		if info.Subject != "" {
+			log.Printf("%s %q %d %dB %s subject=%q request_id=%s", r.Method, loggedPath, status, recorder.bytes, time.Since(start).Round(time.Millisecond), info.Subject, info.RequestID)
+			return
+		}
 		log.Printf("%s %q %d %dB %s", r.Method, loggedPath, status, recorder.bytes, time.Since(start).Round(time.Millisecond))
 	})
 }

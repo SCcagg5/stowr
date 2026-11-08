@@ -322,6 +322,10 @@ func (a *application) handleEncryption(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, err)
 		return
 	}
+	if _, err := a.authorizeReadBucket(r, instance); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	config, err := instance.readBucketEncryption(r.Context())
 	if err != nil {
 		writeAPIError(w, err)

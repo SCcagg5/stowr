@@ -597,6 +597,10 @@ func (a *application) handleMultiparts(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, err)
 		return
 	}
+	if _, err := a.authorizeRead(r, instance, prefix); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	if !instance.multipartUploadsAvailable() {
 		writeAPIError(w, multipartUnsupported())
 		return
