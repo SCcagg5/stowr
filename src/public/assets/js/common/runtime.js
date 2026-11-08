@@ -224,7 +224,6 @@
     readState: readBrowserState,
     writeState: writeBrowserState,
     clearBrowserState,
-    rootURL: applicationRoot.href,
     resolveURL,
     resolvePath,
     encodeRouteSegment,

@@ -1790,8 +1790,8 @@ test('header: the brand and the version of ClickHouse Dash at the left edge of t
     return switcher.right <= theme.left;
   });
   assert.equal(order, true);
-  // Without a path prefix, the page is the root of the site: no "Back to site".
-  assert.equal(await page.isHidden('#backLink'), true);
+  // The page has no "Back to site" link, with or without a path prefix.
+  assert.equal(await page.locator('#backLink').count(), 0);
   await page.context().close();
 });
 
@@ -1813,14 +1813,12 @@ test('header: at 1920, 1440 and 1000 px the brand is 12 px from the left edge an
   const page = await newPage({ viewport: { width: 1920, height: 900 } });
   const cases = [
     { name: 'list', path: MAIN, inner: '.appHeader__inner', first: '.appBrand' },
-    { name: 'list with the way back', path: MAIN, inner: '.appHeader__inner', first: '#backLink', back: true },
     { name: 'preview', path: `${MAIN}reports/2026/q3/summary.md`, inner: '.previewBar__inner', first: '.previewBar__back' },
     { name: 'comparison', path: `${MAIN}versions/report.txt`, inner: '.previewBar__inner', first: '.previewBar__back', compare: true }
   ];
   for (const item of cases) {
     await page.setViewportSize({ width: 1920, height: 900 });
     await page.goto(BASE + item.path, { waitUntil: 'networkidle' });
-    if (item.back) await page.evaluate(() => { document.getElementById('backLink').hidden = false; });
     if (item.compare) {
       await page.waitForSelector('.previewVersion .versionPicker__button');
       await page.click('.previewVersion .versionPicker__button');
@@ -1848,7 +1846,7 @@ const DASH_HEADER_COARSE = 57;
 // The widths of the tests of the header: a phone, a docked DevTools (700 to 1000 px), a laptop and a wide screen.
 const HEADER_WIDTHS = [320, 360, 390, 480, 600, 700, 760, 800, 900, 1000, 1100, 1280, 1440, 1920];
 
-// The geometry of the header: its height, the vertical centre of each control (the way back, the mark, the trigger and
+// The geometry of the header: its height, the vertical centre of each control (the mark, the trigger and
 // the elements over it, the theme button), the order of the controls from left to right, and the scroll of the page.
 function headerRow(page) {
   return page.evaluate(() => {
@@ -1856,9 +1854,9 @@ function headerRow(page) {
     const rect = node => node.getBoundingClientRect();
     const centre = node => Math.round(rect(node).top + rect(node).height / 2);
     const pick = selector => document.querySelector(selector);
-    const controls = ['#backLink', '.appBrand__logo', '.storageSwitcher__trigger', '.storageSwitcher__trigger strong', '#storageSwitcherInfo',
+    const controls = ['.appBrand__logo', '.storageSwitcher__trigger', '.storageSwitcher__trigger strong', '#storageSwitcherInfo',
       '.storageSwitcher__facts', '.storageSwitcher__chevron', '.themeSelect__button'].map(pick).filter(shown);
-    const order = ['#backLink', '.appBrand', '#storageSwitcher', '.themeSelect'].map(pick).filter(shown).map(rect);
+    const order = ['.appBrand', '#storageSwitcher', '.themeSelect'].map(pick).filter(shown).map(rect);
     return {
       header: rect(pick('.appHeader')).height, trigger: rect(pick('.storageSwitcher__trigger')).height, theme: rect(pick('.themeSelect__button')).height,
       spread: Math.max(...controls.map(centre)) - Math.min(...controls.map(centre)),
@@ -1869,29 +1867,25 @@ function headerRow(page) {
   });
 }
 
-test('header: one row with the height of the header of ClickHouse Dash at every width, in the two themes, with a fine and a coarse pointer, also with "Back to site"', async () => {
+test('header: one row with the height of the header of ClickHouse Dash at every width, in the two themes, with a fine and a coarse pointer', async () => {
   for (const coarse of [false, true]) {
     const page = await newPage({ viewport: { width: 1440, height: 900 }, ...(coarse ? { isMobile: true, hasTouch: true } : {}) });
     await open(page, MAIN);
     await page.waitForSelector(`${FACTS} [data-fact="usage"][data-used-bytes]`);
-    for (const back of [false, true]) {
-      // The page shows the way back behind a path prefix. The test stack has none: the test shows the link.
-      await page.evaluate(value => { document.getElementById('backLink').hidden = !value; }, back);
-      for (const colorScheme of ['light', 'dark']) {
-        await page.emulateMedia({ colorScheme });
-        for (const width of HEADER_WIDTHS) {
-          await page.setViewportSize({ width, height: 900 });
-          const box = await headerRow(page);
-          const where = `${width}${coarse ? ' coarse' : ''} ${colorScheme}${back ? ' back' : ''}: ${JSON.stringify(box)}`;
-          assert.ok(Math.abs(box.header - (coarse ? DASH_HEADER_COARSE : DASH_HEADER)) <= 1, where);
-          // The controls of the header: 28 px as the host picker of ClickHouse Dash, 44 px on a coarse pointer.
-          assert.equal(box.trigger, coarse ? 44 : 28, where);
-          assert.equal(box.theme, coarse ? 44 : 28, where);
-          assert.ok(box.spread <= 2, where);
-          assert.equal(box.overlap, false, where);
-          assert.equal(box.inside, true, where);
-          assert.ok(box.scroll <= 0, where);
-        }
+    for (const colorScheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme });
+      for (const width of HEADER_WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        const box = await headerRow(page);
+        const where = `${width}${coarse ? ' coarse' : ''} ${colorScheme}: ${JSON.stringify(box)}`;
+        assert.ok(Math.abs(box.header - (coarse ? DASH_HEADER_COARSE : DASH_HEADER)) <= 1, where);
+        // The controls of the header: 28 px as the host picker of ClickHouse Dash, 44 px on a coarse pointer.
+        assert.equal(box.trigger, coarse ? 44 : 28, where);
+        assert.equal(box.theme, coarse ? 44 : 28, where);
+        assert.ok(box.spread <= 2, where);
+        assert.equal(box.overlap, false, where);
+        assert.equal(box.inside, true, where);
+        assert.ok(box.scroll <= 0, where);
       }
     }
     assert.deepEqual(page.errors, []);
@@ -1899,24 +1893,20 @@ test('header: one row with the height of the header of ClickHouse Dash at every 
   }
 });
 
-test('header: a narrow window hides the name of the brand, then its version, and the text of "Back to site"', async () => {
+test('header: a narrow window hides the name of the brand, then its version', async () => {
   const page = await newPage({ viewport: { width: 1440, height: 900 } });
   await open(page, MAIN);
-  await page.evaluate(() => { document.getElementById('backLink').hidden = false; });
   const seen = () => page.evaluate(() => {
     const shown = node => node.getBoundingClientRect().width > 2;
     return { name: shown(document.querySelector('.appBrand__name')), version: document.querySelector('#versionBadge').getClientRects().length > 0,
-      back: shown(document.querySelector('.backLink__text')), mark: shown(document.querySelector('.appBrand__logo')) };
+      mark: shown(document.querySelector('.appBrand__logo')) };
   });
-  for (const [width, expected] of [[1440, { name: true, version: true, back: true, mark: true }], [601, { name: true, version: true, back: true, mark: true }],
-    [600, { name: false, version: true, back: false, mark: true }], [421, { name: false, version: true, back: false, mark: true }],
-    [420, { name: false, version: false, back: false, mark: true }], [320, { name: false, version: false, back: false, mark: true }]]) {
+  for (const [width, expected] of [[1440, { name: true, version: true, mark: true }], [601, { name: true, version: true, mark: true }],
+    [600, { name: false, version: true, mark: true }], [421, { name: false, version: true, mark: true }],
+    [420, { name: false, version: false, mark: true }], [320, { name: false, version: false, mark: true }]]) {
     await page.setViewportSize({ width, height: 900 });
     assert.deepEqual(await seen(), expected, String(width));
   }
-  // The link keeps its name for a screen reader and in its tooltip.
-  assert.equal(await page.getAttribute('#backLink', 'title'), 'Back to site');
-  assert.equal((await page.textContent('#backLink')).trim(), 'Back to site');
   await page.context().close();
 });
 

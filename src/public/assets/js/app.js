@@ -308,14 +308,8 @@ BB.cfg = config;
   const formatModified = date => (state.modifiedTimeMode === 'absolute' ? formatExact(date) : formatRelative(date));
 
   // ---------------------------------------------------------------------------------------------------------------
-  // Header: the way back to the site and the build
+  // Header: the build
   // ---------------------------------------------------------------------------------------------------------------
-
-  // A reverse proxy can serve this page under a path prefix (for example /stowr/). The link then goes back to the root
-  // of the site. Without a prefix, the page is the root of the site and the link does not show.
-  function renderHeaderLinks() {
-    ui.backLink.hidden = new URL(BB.runtime.rootURL).pathname === '/';
-  }
 
   // The version of the server under the name of the product. The page keeps the last text in this browser, so a
   // reload does not show "--" until /api/instances answers.
@@ -1633,7 +1627,7 @@ BB.cfg = config;
 
   function bindElements() {
     for (const [name, id] of Object.entries({
-      backLink: 'backLink', versionBadge: 'versionBadge', switcher: 'storageSwitcher', usageBanner: 'usageBanner', crumbs: 'crumbs',
+      versionBadge: 'versionBadge', switcher: 'storageSwitcher', usageBanner: 'usageBanner', crumbs: 'crumbs',
       title: 'folderTitle', searchForm: 'searchForm', searchInput: 'searchInput',
       refreshButton: 'refreshButton', actionsButton: 'actionsButton', actionsMenu: 'actionsMenu', zipItem: 'zipItem',
       insightsItem: 'insightsItem', accessBadge: 'accessBadge', uploadWrap: 'uploadWrap',
@@ -1708,7 +1702,6 @@ BB.cfg = config;
 
   bindElements();
   bindEvents();
-  renderHeaderLinks();
   restoreVersion();
   update();
   initialize();

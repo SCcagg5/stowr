@@ -2,8 +2,7 @@
 
    Design rules. The tokens below write them down; the components only name tokens.
    1. Header of ClickHouse Dash at the full width of the window, one row of 45 px at every width with controls of
-      28 px, as in ClickHouse Dash: the mark, the name and the version at the left edge (with "Back to site" behind a
-      path prefix), the bucket selector and the theme selector at the right edge. The page is
+      28 px, as in ClickHouse Dash: the mark, the name and the version at the left edge, the bucket selector and the theme selector at the right edge. The page is
       made of parts: 14 px corners, on --panel with a hairline edge. In the part of the browser, the
       crumbs and the toolbar share one row when they fit; the crumbs are the bucket mark, a slash and the folders.
    2. Data of ClickHouse Dash. Tables are dense: 32 px rows (26 px compact), 13 px text, 12 px semibold muted heads,
@@ -5228,8 +5227,7 @@ body > .appHeader {
 }
 
 /* A narrow window keeps the one row of the header. The header gives less space to the brand, in this order: the
-   "Back to site" link keeps its chevron only, the name of the brand goes (the version stays, under nothing), then the
-   version goes. The gutter and the gaps get smaller, as in ClickHouse Dash. */
+   name of the brand goes (the version stays, under nothing), then the version goes. The gutter and the gaps get smaller, as in ClickHouse Dash. */
 @media (max-width: 600px) {
   .appHeader__inner {
     gap: 8px;
@@ -5239,7 +5237,6 @@ body > .appHeader {
     gap: 6px;
   }
 
-  .backLink__text,
   .appBrand__name {
     position: absolute;
     width: 1px;
