@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ const (
 	maxIdentityTokenBytes = 16384
 	// identityCacheMaxEntries is the most results of valid tokens that the verifier keeps.
 	identityCacheMaxEntries = 4096
-	// maxIdentityTime is the largest value of iat and exp that the verifier accepts.
+	// maxIdentityTime is the largest absolute value of iat and exp that the verifier accepts.
 	maxIdentityTime = 9000000000000000
 	// maxIdentityJSONDepth is the deepest nesting that the strict JSON reader accepts.
 	maxIdentityJSONDepth = 32
@@ -263,22 +264,25 @@ func identityJSONString(raw json.RawMessage) (string, bool) {
 	return out, true
 }
 
-// identityJSONTime reads a raw JSON integer from 0 to maxIdentityTime. It accepts digits only: no sign, no
-// fraction, no exponent.
+// identityJSONTime reads a raw JSON number as a NumericDate (RFC 7519), as ClickHouse Dash does. The number can have
+// a sign, a fraction and an exponent. Stowr rounds it down to a whole second. The absolute value must not be more
+// than maxIdentityTime. Any other JSON value is not a date.
 func identityJSONTime(raw json.RawMessage) (int64, bool) {
-	if len(raw) == 0 || len(raw) > 16 {
+	if len(raw) == 0 {
 		return 0, false
 	}
+	// Only the characters of a JSON number: this refuses a string, a literal, and the forms that ParseFloat reads but
+	// JSON does not have (hexadecimal, Inf, NaN, underscores).
 	for _, c := range raw {
-		if c < '0' || c > '9' {
+		if (c < '0' || c > '9') && c != '-' && c != '+' && c != '.' && c != 'e' && c != 'E' {
 			return 0, false
 		}
 	}
-	value, err := strconv.ParseInt(string(raw), 10, 64)
-	if err != nil || value > maxIdentityTime {
+	value, err := strconv.ParseFloat(string(raw), 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > maxIdentityTime {
 		return 0, false
 	}
-	return value, true
+	return int64(math.Floor(value)), true
 }
 
 // identityAudienceHolds tells if the claim aud is the audience, or an array of strings that holds it.

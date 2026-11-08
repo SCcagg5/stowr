@@ -122,8 +122,10 @@ question"). The rules:
   the service, or an array that holds it.
 - `sub` has 1 to 256 bytes of UTF-8, without a control character. Stowr uses it as opaque text. It sends it to the PDP as
   the subject with the type `user`, and sends no other claim.
-- `iat` and `exp` are whole numbers of seconds. Stowr applies the clock skew to both: it refuses a token when its clock is
-  later than `exp` plus the skew, and when `iat` is later than its clock plus the skew.
+- `iat` and `exp` are numbers of seconds (RFC 7519 NumericDate). Stowr accepts a fraction, an exponent and a sign, as
+  ClickHouse Dash does, and rounds the value down to a whole second. The absolute value must be 9e15 or less.
+  Stowr applies the clock skew to both: it refuses a token when its clock is later than `exp` plus the skew, and when
+  `iat` is later than its clock plus the skew.
 - Stowr refuses a token when `exp` is less than `iat`, or when `exp` minus `iat` is more than `max_age`.
 - Stowr ignores `nbf` and each unknown claim. It reads `owner` for the log only. It never uses `owner` for a decision.
 - Stowr reads the token only from the configured header. It never reads `Authorization`, a cookie or a query parameter.
