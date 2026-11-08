@@ -51,8 +51,17 @@ func TestForceReadOnlyIsAnAdministrativeCeiling(t *testing.T) {
 		}
 	}
 }
+
+// testOpenAccess is the access block of a test configuration that checks no identity token. A test adds it at the end
+// of its text: the line numbers of the other blocks do not change.
+const testOpenAccess = "\naccess {\n  mode = \"open\"\n}\n"
+
 func minimalTestConfig(id string) string {
 	return `
+access {
+  mode = "open"
+}
+
 auth "public" {
   provider = "s3"
   mode     = "anonymous"

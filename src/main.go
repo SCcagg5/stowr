@@ -57,6 +57,9 @@ func main() {
 	for _, setting := range effectiveConfiguration(cfg) {
 		log.Printf("config.effective %s = %s  # %s", setting.Name, setting.Value, setting.Source)
 	}
+	for _, warning := range configWarnings(cfg) {
+		log.Printf("config.warning %s", warning)
+	}
 	buildNotes, err := applyMultipartCopyBuildSettings()
 	if err != nil {
 		log.Fatal(err)

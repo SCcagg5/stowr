@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // keyForms tells the forms that a configuration key accepts.
@@ -41,6 +42,9 @@ type configBlock struct {
 
 var configBlocks = []configBlock{
 	{"server", "server { ... }", "Zero or one block. The listener, the logs and the limits of the process."},
+	{"access", "access { ... }", "Exactly one block. Required. It sets the policy of access (docs/ACCESS.md). Without it, the start stops."},
+	{"access.identity", "access { identity { ... } }", "One block with mode authzen. No block with mode open. The rules to check the identity token."},
+	{"access.pdp", "access { pdp { ... } }", "One block with mode authzen. No block with mode open. The connection to the policy decision point (PDP)."},
 	{"auth", `auth "<id>" { ... }`, "One or more blocks. A credential set and an endpoint that one or more buckets use."},
 	{"auth.usage", `auth "<id>" { usage { ... } }`, "Zero or one block in an auth block with provider \"s3\". The admin API that gives the usage and the quota of the buckets of the auth block (docs/ARCHITECTURE.md, \"Usage and quota of a bucket\"). Without it, the interface shows no usage and no quota."},
 	{"bucket", `bucket "<id>" { ... }`, "One or more blocks. One bucket that the browser shows. The label is the id of the bucket in the URL."},
@@ -64,6 +68,23 @@ var configKeys = []configKey{
 	{"server", "max_archive_entries", "integer", "10000", "1 to 1000000", formValue, false, "The entries of a ZIP central directory that the server reads, and the members that a request can select."},
 	{"server", "max_background_storage_bytes", "integer", "274877906944", "1048576 to 1125899906842624", formValue, false, "The provider bytes that one background job can transfer."},
 	{"server", "max_background_storage_requests", "integer", "100000", "1 to 10000000", formValue, false, "The provider calls that one background job can make."},
+
+	{"access", "mode", "text", "(required)", "authzen or open (lower case)", formValue, false, "authzen: the server checks the identity token and asks the PDP. open: the server makes no check and writes a warning at start."},
+
+	{"access.identity", "header", "text", `"X-Identity-Token"`, "1 to 64 characters: letters, digits and \"-\". Not Cookie, Authorization, Host, Content-Type or Content-Length", formValue, false, "The name of the HTTP header that holds the identity token."},
+	{"access.identity", "issuer", "text", "(required)", "1 to 1024 bytes of UTF-8, without a control character", formValue, false, "The iss of the identity tokens that the server accepts."},
+	{"access.identity", "audience", "text", "(required)", "1 to 256 bytes of UTF-8, without a control character", formValue, false, "The id of this service. It is the aud of the tokens, the server of the action document and the root of each chain of resources."},
+	{"access.identity", "public_keys", "text", "(required)", "a JWK Set (RFC 7517) with 1 to 16 keys, Ed25519 or P-256", formValue | formEnv | formFile, false, "The public keys of the issuer. The server checks the signature of each identity token with them. It is not a secret: print-config shows the type and the kid of each key."},
+	{"access.identity", "max_age", "duration", `"5m"`, "1s to 24h", formValue, false, "The longest life (exp minus iat) of an identity token."},
+	{"access.identity", "clock_skew", "duration", `"60s"`, "0s to 5m, whole seconds", formValue, false, "The difference between the clock of the server and the clock of the issuer that the server accepts."},
+
+	{"access.pdp", "url", "URL", "(required)", "http or https, with a host, without credentials, query or fragment, and without a \"/\" at the end", formValue | formEnv | formFile, false, "The base URL of the PDP. The client adds /access/v1/evaluation and /access/v1/evaluations to it."},
+	{"access.pdp", "plain_http", "boolean", "false", "true with an http URL. false with an https URL", formValue, false, "true accepts an http URL: the server then sends the token and the questions without TLS. Use it only on a trusted network."},
+	{"access.pdp", "token", "text", "(required)", "1 to 4096 bytes, no space and no control character", formEnv | formFile, true, "The bearer token that the server sends to the PDP. It is a secret: the form in clear text stops the start."},
+	{"access.pdp", "timeout", "duration", `"500ms"`, "10ms to 1m", formValue, false, "The deadline of one request to the PDP, without context.usage."},
+	{"access.pdp", "usage_timeout", "duration", `"2s"`, "100ms to 1m, and not less than timeout", formValue, false, "The deadline of one question with context.usage."},
+	{"access.pdp", "cache_ttl", "duration", `"30s"`, "0s to 1h", formValue, false, "The life of an answer of the PDP in memory. 0s keeps no answer."},
+	{"access.pdp", "max_evaluations", "integer", "64", "1 to 1024", formValue, false, "The most items in one Access Evaluations request."},
 
 	{"auth", "provider", "text", "(required)", "s3 or gcs (lower case)", formValue, false, "The storage protocol."},
 	{"auth", "mode", "text", "s3: access_key with credentials, else anonymous. gcs: service_account with credentials_file, else anonymous", "s3: access_key or anonymous. gcs: service_account or anonymous", formValue, false, "How the server signs the provider requests."},
@@ -174,7 +195,10 @@ func configReference() string {
 	b.WriteString("- An unknown block, an unknown attribute or a duplicate attribute stops the start.\n")
 	b.WriteString("- A value that is not in its range stops the start. The error gives the key and the line.\n")
 	b.WriteString("- A key without a value in the file has its default value. A key with `(required)` must have a value.\n")
+	b.WriteString("- A file needs one `access` block. The block has mode `authzen` or mode `open`.\n")
 	b.WriteString("- A file needs one `bucket` block or one `volume` block at least. A `bucket` block needs an `auth` block.\n")
+	b.WriteString("- A duration is one whole number and one unit: `ms`, `s`, `m` or `h`. For example: `500ms`, `30s`, `5m`, `1h`.\n")
+	b.WriteString("  A sign, a fraction, a space or two units (`1m30s`) stops the start.\n")
 	b.WriteString("- `stowr print-config -c <file>` checks the file, writes the value of each key and its source, and exits with status 0.\n")
 	b.WriteString("  The source is `file`, `env:<VAR>`, `file:<path>` or `default`. The output hides each secret.\n")
 	b.WriteString("- At start, the server writes the same values in its log.\n\n")
@@ -282,6 +306,35 @@ func effectiveConfiguration(cfg appConfig) []effectiveSetting {
 		"max_background_storage_bytes":        strconv.FormatInt(runtime.MaxBackgroundStorageBytes, 10),
 		"max_background_storage_requests":     strconv.FormatInt(runtime.MaxBackgroundStorageRequests, 10),
 	})
+	addAccess := func() {
+		access := cfg.Access
+		addBlock("access", "access", map[string]string{"mode": strconv.Quote(access.Mode)})
+		if !access.enforced() {
+			return
+		}
+		keyNames := make([]string, 0, len(access.Keys))
+		for _, key := range access.Keys {
+			keyNames = append(keyNames, key.display())
+		}
+		addBlock("access.identity", "access.identity", map[string]string{
+			"header":      strconv.Quote(access.Header),
+			"issuer":      strconv.Quote(access.Issuer),
+			"audience":    strconv.Quote(access.Audience),
+			"public_keys": quotedList(keyNames),
+			"max_age":     strconv.Quote(accessDurationText(cfg, "access.identity.max_age", access.MaxAge)),
+			"clock_skew":  strconv.Quote(accessDurationText(cfg, "access.identity.clock_skew", access.ClockSkew)),
+		})
+		addBlock("access.pdp", "access.pdp", map[string]string{
+			"url":             strconv.Quote(access.PDPURL),
+			"plain_http":      strconv.FormatBool(access.PDPPlainHTTP),
+			"token":           "<hidden>",
+			"timeout":         strconv.Quote(accessDurationText(cfg, "access.pdp.timeout", access.PDPTimeout)),
+			"usage_timeout":   strconv.Quote(accessDurationText(cfg, "access.pdp.usage_timeout", access.PDPUsageTimeout)),
+			"cache_ttl":       strconv.Quote(accessDurationText(cfg, "access.pdp.cache_ttl", access.PDPCacheTTL)),
+			"max_evaluations": strconv.Itoa(access.PDPMaxEvaluations),
+		})
+	}
+	addAccess()
 	hidden := func(value string) string {
 		if value == "" {
 			return "<none>"
@@ -344,6 +397,15 @@ func effectiveConfiguration(cfg appConfig) []effectiveSetting {
 		add("volume "+strconv.Quote(volume.ID), values)
 	}
 	return out
+}
+
+// accessDurationText gives the text of a duration key of the access block: the text of the file or the default text.
+// A configuration that was not made from a file has no such text: the function then gives the shortest strict text.
+func accessDurationText(cfg appConfig, path string, value time.Duration) string {
+	if text, ok := cfg.DurationTexts[path]; ok {
+		return text
+	}
+	return durationText(value)
 }
 
 func quotedOrNone(value string) string {

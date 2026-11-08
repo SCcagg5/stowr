@@ -987,7 +987,7 @@ bucket "two" {
   bucket      = "two"
   permissions = ["read", "write"]
 }
-`, "test.hcl", t.TempDir())
+`+testOpenAccess, "test.hcl", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

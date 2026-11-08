@@ -1,3 +1,8 @@
+# The test stack has no edge and no PDP: the server checks no identity token.
+access {
+  mode = "open"
+}
+
 server {
   listen                               = ":8080"
   job_history_limit                    = 10

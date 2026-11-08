@@ -35,7 +35,7 @@ func loadUsageConfig(t *testing.T, content string) (appConfig, string, error) {
 	writeConfig(t, filepath.Join(dir, "s3-secret"), "s3-secret-value\n")
 	writeConfig(t, filepath.Join(dir, "token"), "admin-token-value\n")
 	path := filepath.Join(dir, "config.hcl")
-	writeConfig(t, path, content)
+	writeConfig(t, path, content+testOpenAccess)
 	cfg, err := loadConfig(path)
 	return cfg, dir, err
 }
@@ -215,7 +215,7 @@ func TestUsageConfigErrors(t *testing.T) {
 		writeConfig(t, filepath.Join(dir, "s3-secret"), "s3-secret-value\n")
 		writeConfig(t, filepath.Join(dir, "token"), "admin-token-value\n")
 		writeConfig(t, filepath.Join(dir, "gcs.json"), `{"type":"service_account"}`)
-		_, err := decodeConfig(test.config, filepath.Join(dir, "config.hcl"), dir)
+		_, err := decodeConfig(test.config+testOpenAccess, filepath.Join(dir, "config.hcl"), dir)
 		if err == nil {
 			t.Errorf("%s: the start must stop", name)
 			continue

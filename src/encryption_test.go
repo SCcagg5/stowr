@@ -52,7 +52,7 @@ func loadEncryptionConfig(t *testing.T, content string) (appConfig, error) {
 	dir := t.TempDir()
 	writeConfig(t, filepath.Join(dir, "gcs.json"), `{"type":"service_account"}`)
 	path := filepath.Join(dir, "config.hcl")
-	writeConfig(t, path, content)
+	writeConfig(t, path, content+testOpenAccess)
 	return loadConfig(path)
 }
 

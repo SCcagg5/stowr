@@ -1,3 +1,45 @@
+# The policy of access. This block is required.
+# mode "authzen": the server checks the identity token that the edge sends, and it asks the PDP (policy decision
+# point) about each operation. Put the server behind the edge, and limit the network so that only the edge can
+# reach it.
+access {
+  mode = "authzen"
+
+  identity {
+    # The header that holds the identity token. The default is X-Identity-Token.
+    # header = "X-Identity-Token"
+    issuer           = "https://edge.example"
+    # The id of this service: the aud of the tokens and the root of each chain of resources.
+    audience         = "infra-s3"
+    # A JWK Set (RFC 7517) with 1 to 16 keys, Ed25519 or P-256. Give public_keys, public_keys_env or public_keys_file.
+    public_keys_file = "/run/keys/edge-jwks.json"
+    # The longest life of a token, and the accepted difference of clock. A duration is a whole number and
+    # one unit: ms, s, m or h.
+    max_age          = "5m"
+    clock_skew       = "60s"
+  }
+
+  pdp {
+    url           = "https://pdp.example:4182"
+    # true accepts an http URL. Use it only on a trusted network.
+    plain_http    = false
+    # The token is a secret: give token_env or token_file.
+    token_file    = "/run/secrets/pdp-token"
+    timeout       = "500ms"
+    # The deadline of a question with context.usage.
+    usage_timeout = "2s"
+    # 0s keeps no answer of the PDP.
+    cache_ttl     = "30s"
+    max_evaluations = 64
+  }
+}
+
+# For a test or a local use without the edge, use mode "open" and no identity block or pdp block. The server then
+# checks no identity token and asks no PDP, and it writes a warning at start.
+# access {
+#   mode = "open"
+# }
+
 server {
   listen            = ":8080"
   job_history_limit = 10

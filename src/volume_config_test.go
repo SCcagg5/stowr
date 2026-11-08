@@ -15,7 +15,7 @@ func volumeConfigText(lines string) string {
 func decodeVolumeConfig(t *testing.T, text string) (appConfig, error) {
 	t.Helper()
 	dir := t.TempDir()
-	return decodeConfig(text, filepath.Join(dir, "config.hcl"), dir)
+	return decodeConfig(text+testOpenAccess, filepath.Join(dir, "config.hcl"), dir)
 }
 
 func TestVolumeBlockDecodesAndPrintsItsKeys(t *testing.T) {

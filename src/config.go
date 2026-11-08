@@ -17,6 +17,8 @@ type appConfig struct {
 	Listen          string
 	JobHistoryLimit int
 	Runtime         runtimePolicy
+	// Access is the access block: the policy of access (access_config.go). The block is mandatory.
+	Access          accessConfig
 	Authentications []authConfig
 	Buckets         []bucketConfig
 	// Volumes are the volume blocks: the folders of the server that the browser shows as buckets (volume_config.go).
@@ -26,6 +28,9 @@ type appConfig struct {
 	// Sources gives the source of each key that the file sets: "file",
 	// "env:VAR" or "file:/path". A key that is not in it has its default.
 	Sources map[string]string
+	// DurationTexts gives the text of each duration key of the access block, as the file writes it or as the
+	// default is: print-config shows this text. The key is the path of the key, for example "access.pdp.timeout".
+	DurationTexts map[string]string
 }
 
 type authConfig struct {
@@ -137,6 +142,7 @@ func decodeConfig(data, sourceName, sourceDir string) (appConfig, error) {
 		SourceDir:       sourceDir,
 		SourceName:      sourceName,
 		Sources:         make(map[string]string),
+		DurationTexts:   make(map[string]string),
 	}
 
 	if len(root.Attrs) != 0 {
@@ -145,7 +151,7 @@ func decodeConfig(data, sourceName, sourceDir string) (appConfig, error) {
 		}
 	}
 
-	var serverSeen bool
+	var serverSeen, accessSeen bool
 	authByID := make(map[string]authConfig)
 	bucketIDs := make(map[string]struct{})
 	bucketBlocks := make([]hclBlock, 0)
@@ -161,6 +167,14 @@ func decodeConfig(data, sourceName, sourceDir string) (appConfig, error) {
 				return appConfig{}, err
 			}
 			recordSources(&cfg, "server", "server", block, sourceDir)
+		case "access":
+			if accessSeen {
+				return appConfig{}, block.errorf("only one access block is allowed")
+			}
+			accessSeen = true
+			if err := decodeAccessBlock(block, &cfg, sourceDir); err != nil {
+				return appConfig{}, err
+			}
 		case "auth":
 			auth, err := decodeAuthBlock(block, sourceDir)
 			if err != nil {
@@ -198,7 +212,7 @@ func decodeConfig(data, sourceName, sourceDir string) (appConfig, error) {
 			cfg.Volumes = append(cfg.Volumes, volume)
 			recordSources(&cfg, "volume "+strconv.Quote(volume.ID), "volume", block, sourceDir)
 		default:
-			return appConfig{}, block.errorf("unknown block type %q; supported blocks are server, auth, bucket and volume", block.Type)
+			return appConfig{}, block.errorf("unknown block type %q; supported blocks are server, access, auth, bucket and volume", block.Type)
 		}
 	}
 
@@ -222,6 +236,12 @@ func decodeConfig(data, sourceName, sourceDir string) (appConfig, error) {
 		recordSources(&cfg, "bucket "+strconv.Quote(bucket.ID), "bucket", block, sourceDir)
 	}
 	if err := validateRuntimePolicy(&cfg); err != nil {
+		return appConfig{}, err
+	}
+	if !accessSeen {
+		return appConfig{}, fmt.Errorf("the access block is required: add `access { mode = \"open\" }` (no check), or an access block with mode = \"authzen\", an identity block and a pdp block")
+	}
+	if err := validateAccessResources(cfg); err != nil {
 		return appConfig{}, err
 	}
 

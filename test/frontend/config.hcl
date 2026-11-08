@@ -1,3 +1,8 @@
+# The tests of the interface have no edge and no PDP: the server checks no identity token.
+access {
+  mode = "open"
+}
+
 # The test stack of the interface: three S3 providers.
 # run.sh starts it with Docker Compose. The three auth blocks use the same key: the entrypoint of each provider reads
 # the first access_key_id and the first secret_access_key_file of this file.

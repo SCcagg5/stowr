@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+// The file docs/configuration-reference.md is the output of configReference: the program makes it from the table of
+// keys. Run `go run . config-reference > ../docs/configuration-reference.md` in src after a change of the table.
+func TestConfigurationReferenceIsCurrent(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join("..", "docs", "configuration-reference.md"))
+	if err != nil {
+		t.Fatalf("read the reference: %v", err)
+	}
+	if string(data) != configReference() {
+		t.Fatal("docs/configuration-reference.md is not the output of configReference: make it again with go run . config-reference")
+	}
+}
+
 func TestOmittedPermissionsInheritCredentialCapabilities(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -29,7 +42,7 @@ bucket "inherited" {
   auth   = "shared"
   bucket = "bucket"
 }
-`)
+`+testOpenAccess)
 	cfg, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +98,7 @@ bucket "archive" {
   bucket      = "archive"
   permissions = ["read"]
 }
-`)
+`+testOpenAccess)
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
@@ -205,7 +218,7 @@ bucket "archive" {
   auth   = "gcs"
   bucket = "archive-bucket"
 }
-`)
+`+testOpenAccess)
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +244,7 @@ auth "broken" {
 }
 
 bucket "bucket" { auth = "broken" bucket = "bucket" }
-`)
+`+testOpenAccess)
 	_, err := loadConfig(path)
 	if err == nil || !strings.Contains(err.Error(), `unknown attribute "unsupported_option"`) {
 		t.Fatalf("error = %v", err)
@@ -273,7 +286,7 @@ bucket "bucket" {
   bucket         = "bucket"
   max_scan_pages = 1000001
 }
-`)
+`+testOpenAccess)
 	if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "max_scan_pages") {
 		t.Fatalf("error = %v", err)
 	}
@@ -312,7 +325,7 @@ auth "shared" {
 }
 
 bucket "bucket" { auth = "shared" bucket = "bucket" }
-`)
+`+testOpenAccess)
 	_, err := loadConfig(configPath)
 	if err == nil || !strings.Contains(err.Error(), "exceeds the") {
 		t.Fatalf("error = %v", err)
@@ -341,7 +354,7 @@ bucket "broken" {
   bucket      = "bucket"
   permissions = true
 }
-`)
+`+testOpenAccess)
 	_, err := loadConfig(path)
 	if err == nil || !strings.Contains(err.Error(), `attribute "permissions" must be a string list`) {
 		t.Fatalf("error = %v", err)

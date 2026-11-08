@@ -11,7 +11,10 @@ A test makes sure that this file and the table agree.
 - An unknown block, an unknown attribute or a duplicate attribute stops the start.
 - A value that is not in its range stops the start. The error gives the key and the line.
 - A key without a value in the file has its default value. A key with `(required)` must have a value.
+- A file needs one `access` block. The block has mode `authzen` or mode `open`.
 - A file needs one `bucket` block or one `volume` block at least. A `bucket` block needs an `auth` block.
+- A duration is one whole number and one unit: `ms`, `s`, `m` or `h`. For example: `500ms`, `30s`, `5m`, `1h`.
+  A sign, a fraction, a space or two units (`1m30s`) stops the start.
 - `stowr print-config -c <file>` checks the file, writes the value of each key and its source, and exits with status 0.
   The source is `file`, `env:<VAR>`, `file:<path>` or `default`. The output hides each secret.
 - At start, the server writes the same values in its log.
@@ -61,6 +64,41 @@ Syntax: `server { ... }`. Zero or one block. The listener, the logs and the limi
 | `max_archive_entries` | integer | 10000 | 1 to 1000000 | value | no | The entries of a ZIP central directory that the server reads, and the members that a request can select. |
 | `max_background_storage_bytes` | integer | 274877906944 | 1048576 to 1125899906842624 | value | no | The provider bytes that one background job can transfer. |
 | `max_background_storage_requests` | integer | 100000 | 1 to 10000000 | value | no | The provider calls that one background job can make. |
+
+## `access`
+
+Syntax: `access { ... }`. Exactly one block. Required. It sets the policy of access (docs/ACCESS.md). Without it, the start stops.
+
+| Key | Type | Default | Range | Forms | Secret | Use |
+|---|---|---|---|---|---|---|
+| `mode` | text | (required) | authzen or open (lower case) | value | no | authzen: the server checks the identity token and asks the PDP. open: the server makes no check and writes a warning at start. |
+
+## `access.identity`
+
+Syntax: `access { identity { ... } }`. One block with mode authzen. No block with mode open. The rules to check the identity token.
+
+| Key | Type | Default | Range | Forms | Secret | Use |
+|---|---|---|---|---|---|---|
+| `header` | text | "X-Identity-Token" | 1 to 64 characters: letters, digits and "-". Not Cookie, Authorization, Host, Content-Type or Content-Length | value | no | The name of the HTTP header that holds the identity token. |
+| `issuer` | text | (required) | 1 to 1024 bytes of UTF-8, without a control character | value | no | The iss of the identity tokens that the server accepts. |
+| `audience` | text | (required) | 1 to 256 bytes of UTF-8, without a control character | value | no | The id of this service. It is the aud of the tokens, the server of the action document and the root of each chain of resources. |
+| `public_keys` | text | (required) | a JWK Set (RFC 7517) with 1 to 16 keys, Ed25519 or P-256 | value, `_env`, `_file` | no | The public keys of the issuer. The server checks the signature of each identity token with them. It is not a secret: print-config shows the type and the kid of each key. |
+| `max_age` | duration | "5m" | 1s to 24h | value | no | The longest life (exp minus iat) of an identity token. |
+| `clock_skew` | duration | "60s" | 0s to 5m, whole seconds | value | no | The difference between the clock of the server and the clock of the issuer that the server accepts. |
+
+## `access.pdp`
+
+Syntax: `access { pdp { ... } }`. One block with mode authzen. No block with mode open. The connection to the policy decision point (PDP).
+
+| Key | Type | Default | Range | Forms | Secret | Use |
+|---|---|---|---|---|---|---|
+| `url` | URL | (required) | http or https, with a host, without credentials, query or fragment, and without a "/" at the end | value, `_env`, `_file` | no | The base URL of the PDP. The client adds /access/v1/evaluation and /access/v1/evaluations to it. |
+| `plain_http` | boolean | false | true with an http URL. false with an https URL | value | no | true accepts an http URL: the server then sends the token and the questions without TLS. Use it only on a trusted network. |
+| `token` | text | (required) | 1 to 4096 bytes, no space and no control character | `_env`, `_file` | yes | The bearer token that the server sends to the PDP. It is a secret: the form in clear text stops the start. |
+| `timeout` | duration | "500ms" | 10ms to 1m | value | no | The deadline of one request to the PDP, without context.usage. |
+| `usage_timeout` | duration | "2s" | 100ms to 1m, and not less than timeout | value | no | The deadline of one question with context.usage. |
+| `cache_ttl` | duration | "30s" | 0s to 1h | value | no | The life of an answer of the PDP in memory. 0s keeps no answer. |
+| `max_evaluations` | integer | 64 | 1 to 1024 | value | no | The most items in one Access Evaluations request. |
 
 ## `auth`
 
