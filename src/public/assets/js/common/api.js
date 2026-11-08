@@ -61,25 +61,49 @@
     return url.href;
   }
 
+  // The words of the answers of the access policy. The server sends the code, the action and Retry-After. The page
+  // shows a short text for the person. Other answers keep the message of the server.
+  function accessMessage(status, code, action, retryAfter, message) {
+    if (status === 401 && code === 'unauthenticated') return 'Your session ended. Reload the page.';
+    if (status === 403 && code === 'forbidden' && action) return `The action ${action} is not allowed.`;
+    if (status === 429 && code === 'too_many_requests') {
+      return retryAfter > 0
+        ? `The budget of this action is used. Try again in ${retryAfter} ${retryAfter === 1 ? 'second' : 'seconds'}.`
+        : 'The budget of this action is used. Try again later.';
+    }
+    if (status === 503 && code === 'pdp_unavailable') return 'The access decision service does not answer. Try again later.';
+    return message;
+  }
+
+  function retryAfterSeconds(value) {
+    const seconds = Number.parseInt(String(value || ''), 10);
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  }
+
   async function request(path, options) {
     const response = await fetch(BB.runtime.resolvePath(path), { cache: 'no-store', ...(options || {}) });
     if (response.ok) return response;
     let message = `HTTP ${response.status}`;
     let code = '';
+    let action = '';
     try {
       const type = response.headers.get('Content-Type') || '';
       if (type.includes('application/json')) {
         const payload = await response.json();
         message = payload?.error?.message || payload?.message || message;
         code = payload?.error?.code || payload?.code || '';
+        action = String(payload?.error?.action || '');
       } else {
         const text = (await response.text()).trim();
         if (text) message = text;
       }
     } catch (_) {}
-    const error = new Error(message);
+    const retryAfter = retryAfterSeconds(response.headers.get('Retry-After'));
+    const error = new Error(accessMessage(response.status, code, action, retryAfter, message));
     error.status = response.status;
     error.code = code;
+    error.action = action;
+    error.retryAfter = retryAfter;
     throw error;
   }
 
@@ -118,17 +142,23 @@
   function xhrFailure(xhr) {
     let message = xhr.status ? `HTTP ${xhr.status}` : 'Network request failed';
     let code = '';
+    let action = '';
     try {
       const payload = JSON.parse(xhr.responseText || '{}');
       message = payload?.error?.message || payload?.message || message;
       code = payload?.error?.code || payload?.code || '';
+      action = String(payload?.error?.action || '');
     } catch (_) {
       const text = String(xhr.responseText || '').trim();
       if (text) message = text;
     }
-    const error = new Error(message);
-    error.status = Number(xhr.status || 0);
+    const status = Number(xhr.status || 0);
+    const retryAfter = retryAfterSeconds(xhr.getResponseHeader('Retry-After'));
+    const error = new Error(accessMessage(status, code, action, retryAfter, message));
+    error.status = status;
     error.code = code;
+    error.action = action;
+    error.retryAfter = retryAfter;
     return error;
   }
 

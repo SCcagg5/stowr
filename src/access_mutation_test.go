@@ -1035,9 +1035,11 @@ func amSurfaces(t *testing.T, env *accessTestEnv) map[string][]amSurface {
 			{method: http.MethodDelete, target: "/s3?" + key}, {method: http.MethodDelete, target: "/s3?" + key + "&version=v1"},
 		},
 		"/api/permissions/refresh": {{method: http.MethodPost, target: "/api/permissions/refresh?instance=rw"}},
-		"/api/list":                {{method: http.MethodGet, target: "/api/list?instance=rw"}, {method: http.MethodHead, target: "/api/list?instance=rw"}},
-		"/api/stats":               {{method: http.MethodGet, target: "/api/stats?instance=rw&prefix=folder%2F"}},
-		"/api/archive":             {{method: http.MethodGet, target: "/api/archive?instance=rw&prefix=folder%2F"}},
+		// A subfolder: a PDP that says false gives 403. The root gives a navigation listing (access_display_test.go).
+		"/api/list":      {{method: http.MethodGet, target: "/api/list?instance=rw&prefix=folder%2Fnested%2F"}, {method: http.MethodHead, target: "/api/list?instance=rw&prefix=folder%2Fnested%2F"}},
+		"/api/instances": {{method: http.MethodGet, target: "/api/instances"}},
+		"/api/stats":     {{method: http.MethodGet, target: "/api/stats?instance=rw&prefix=folder%2F"}},
+		"/api/archive":   {{method: http.MethodGet, target: "/api/archive?instance=rw&prefix=folder%2F"}},
 		"/api/copy": {
 			{method: http.MethodPost, target: "/api/copy", body: `{"instance":"rw","src":"folder/direct.txt","dst":"other/copy.txt"}`},
 			{method: http.MethodPost, target: "/api/copy", body: `{"instance":"rw","src":"folder/nested/","dst":"copied2/","isPrefix":true}`},
@@ -1161,6 +1163,13 @@ func TestEveryRouteThatAsksTheHandlerRefusesWithAPDPThatSaysFalse(t *testing.T) 
 				// The options route shows only what the PDP allows. It answers 200 and shows nothing here.
 				if strings.Contains(recorder.Body.String(), `"rw"`) {
 					t.Errorf("the options route shows the bucket %q with a PDP that says false", "rw")
+				}
+				continue
+			}
+			if pattern == "/api/instances" {
+				// The list of the instances shows only what the PDP allows. It answers 200 and shows nothing here.
+				if strings.Contains(recorder.Body.String(), `"id":"rw"`) {
+					t.Errorf("the list of the instances shows the bucket %q with a PDP that says false", "rw")
 				}
 				continue
 			}

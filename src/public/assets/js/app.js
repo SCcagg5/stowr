@@ -165,7 +165,11 @@ BB.cfg = config;
     instanceId: '',
     pathPrefix: '',
     rows: [],
-    // '' | 'forbidden' | 'signin' | 'offline' | 'error': why the listing has no rows.
+    // The decisions of the access policy for the listed folder: { read, write, delete }. It is null in open mode,
+    // where the answer of the server has no access member. When read is false, the listing is a navigation listing:
+    // it shows the folders that the person can read, and no file.
+    folderAccess: null,
+    // '' | 'forbidden' | 'signin' | 'offline' | 'decision' | 'error': why the listing has no rows.
     listError: '',
     listErrorText: '',
     previousContinuationTokens: [],
@@ -213,7 +217,20 @@ BB.cfg = config;
   const capitalized = text => text.charAt(0).toUpperCase() + text.slice(1);
   const storageIcon = instance => (isVolume(instance) ? 'folder-open' : 'database');
 
+  // The access policy can refuse a read, a write or a delete in the listed folder only. This is display only: the
+  // server checks each operation again.
+  const folderAccessNeeds = {
+    upload: ['write'], overwrite: ['write'], createFolder: ['write'], copy: ['read', 'write'],
+    delete: ['delete'], rename: ['read', 'write', 'delete'], move: ['read', 'write', 'delete']
+  };
+
+  // True when the listing is a navigation listing: the person cannot read this folder, but can open the folders below.
+  const navigationOnly = () => state.folderAccess?.read === false;
+
   function can(operation, instance = currentInstance()) {
+    const needs = folderAccessNeeds[operation];
+    if (needs && state.folderAccess && instance === currentInstance()
+      && needs.some(name => state.folderAccess[name] === false)) return false;
     if (BB.capabilities?.actionable) return BB.capabilities.actionable(instance, operation);
     const operationState = instance?.operations?.[operation];
     return operationState ? operationState.allowed !== false : true;
@@ -225,7 +242,7 @@ BB.cfg = config;
   const canCopy = () => can('copy');
   const canRename = () => can('rename');
   const versioningSupported = () => currentInstance()?.versioningSupported === true;
-  const canDownloadAll = () => canRead() && config.allowDownloadAll && state.rows.length > 0;
+  const canDownloadAll = () => canRead() && !navigationOnly() && config.allowDownloadAll && state.rows.length > 0;
 
   function orderedRows() {
     const rows = Array.from(state.rows || []);
@@ -485,7 +502,8 @@ BB.cfg = config;
     const write = canWrite();
     const remove = canDelete();
     if (write && remove) return null;
-    if (!write && !remove) return { text: 'Read only', title: `You can read this ${storageNoun(instance)} but not change it.` };
+    const folder = state.folderAccess && (state.folderAccess.write === false || state.folderAccess.delete === false);
+    if (!write && !remove) return { text: 'Read only', title: folder ? 'The access policy lets you read this folder only.' : `You can read this ${storageNoun(instance)} but not change it.` };
     if (!write) return { text: 'No upload', title: 'You cannot write in this folder.' };
     return { text: 'No delete', title: 'You cannot delete in this folder.' };
   }
@@ -497,16 +515,16 @@ BB.cfg = config;
     ui.refreshButton.disabled = !instance || state.isRefreshing;
     ui.actionsButton.disabled = !instance;
     ui.zipItem.disabled = !canDownloadAll();
-    ui.insightsItem.disabled = !read || Boolean(state.listError);
+    ui.insightsItem.disabled = !read || navigationOnly() || Boolean(state.listError);
     ui.insightsItem.querySelector('span').textContent = state.pathPrefix ? 'Folder insights' : `${capitalized(storageNoun(instance))} insights`;
     ui.newFolderItem.hidden = !isVolume(instance);
     ui.newFolderItem.disabled = !read || !canWrite() || Boolean(state.listError);
     ui.uploadWrap.hidden = !instance || !canWrite() || Boolean(state.listError);
     ui.folderTagsItem.hidden = state.tagsUnsupported;
     ui.folderTagsItem.querySelector('span').textContent = state.pathPrefix ? 'Tag this folder' : 'Tag this bucket';
-    ui.folderTagsItem.disabled = !read || !canWrite() || Boolean(state.listError);
+    ui.folderTagsItem.disabled = !read || navigationOnly() || !canWrite() || Boolean(state.listError);
     ui.multipartsItem.hidden = !config.multipartUploadsSupported;
-    ui.multipartsItem.disabled = !read || Boolean(state.listError);
+    ui.multipartsItem.disabled = !read || navigationOnly() || Boolean(state.listError);
     ui.tagFilterWrap.hidden = !state.tagFilterOn || state.tagsUnsupported;
     renderSettings();
     const badge = accessBadge();
@@ -554,13 +572,17 @@ BB.cfg = config;
     if (!currentInstance()) return 'none';
     if (!canRead()) return 'unreadable';
     if (state.listError) return `error-${state.listError}`;
-    if (!state.rows.length) return state.isRefreshing ? 'loading' : (canWrite() ? 'empty-writable' : 'empty');
+    if (!state.rows.length) {
+      if (state.isRefreshing) return 'loading';
+      if (navigationOnly()) return 'empty-navigation';
+      return canWrite() ? 'empty-writable' : 'empty';
+    }
     return 'table';
   }
 
   function renderListing() {
     const mode = listingMode();
-    const signature = `${mode}:${state.listErrorText}:${state.loadError}:${state.pathPrefix}`;
+    const signature = `${mode}:${navigationOnly()}:${state.listErrorText}:${state.loadError}:${state.pathPrefix}`;
     if (signature !== ui.listingSignature) {
       ui.listingSignature = signature;
       ui.table = null;
@@ -574,7 +596,8 @@ BB.cfg = config;
             h('button', { type: 'button', class: 'button', onclick: () => initialize() }, ic('refresh'), 'Try again'));
           break;
         case 'none':
-          content = emptyBox('lock', 'No bucket is available', 'The configuration of the server has no bucket and no volume.');
+          content = emptyBox('lock', 'No bucket is available to you',
+            'The server shows only the buckets that the access policy gives to you. Ask an administrator for a grant.');
           break;
         case 'unreadable':
           content = emptyBox('lock', 'You cannot list this bucket', 'Read access is not available. Other actions stay hidden.');
@@ -586,6 +609,10 @@ BB.cfg = config;
         case 'error-signin':
           // The notice at the top of the page gives the message and the "Reload" button.
           content = emptyBox('lock', 'This folder shows after a new sign-in', '');
+          break;
+        case 'error-decision':
+          content = emptyBox('lock', 'The access decision service does not answer', 'Try again later.',
+            h('button', { type: 'button', class: 'button', onclick: () => manualRefresh() }, ic('refresh'), 'Try again'));
           break;
         case 'error-offline':
           content = emptyBox('cloud-off', 'The server does not answer', 'The folder cannot be listed now.',
@@ -602,10 +629,18 @@ BB.cfg = config;
         case 'empty':
           content = emptyBox('folder-open', 'This folder is empty', '');
           break;
+        case 'empty-navigation':
+          content = emptyBox('lock', 'No folder to open', 'The access policy gives you no folder here.',
+            state.pathPrefix && h('button', { type: 'button', class: 'button', onclick: () => goToPrefix('') }, ic(storageIcon(currentInstance())), `Go to the ${storageNoun(currentInstance())} root`));
+          break;
         default:
           content = buildTable();
       }
-      ui.listing.replaceChildren(content);
+      // A navigation listing shows a short note above the folders.
+      const note = navigationOnly() && mode === 'table'
+        ? h('p', { class: 'listingNote', role: 'note', 'data-navigation-note': 'true' }, ic('lock'), 'You can open only the folders below.')
+        : null;
+      ui.listing.replaceChildren(...[note, content].filter(Boolean));
     }
     if (mode === 'table') renderTable();
   }
@@ -802,7 +837,7 @@ BB.cfg = config;
       h('td', { class: 'col-versions' }, versionCell(row)),
       h('td', { class: 'num col-size' }, size),
       h('td', { class: 'col-modified' }, modified),
-      h('td', { class: 'col-menu' }, rowMenu(row)));
+      h('td', { class: 'col-menu' }, navigationOnly() ? null : rowMenu(row)));
     row.element = tr;
     return tr;
   }
@@ -837,6 +872,7 @@ BB.cfg = config;
     const status = Number(error?.status || 0);
     if (status === 401) return 'signin';
     if (status === 403) return 'forbidden';
+    if (status === 503 && error?.code === 'pdp_unavailable') return 'decision';
     if ([502, 503, 504].includes(status) || (!status && (error instanceof TypeError || /network|fetch/i.test(String(error?.message || ''))))) return 'offline';
     return 'error';
   }
@@ -878,7 +914,8 @@ BB.cfg = config;
       state.isInitializing = false;
       const kind = classify(error);
       state.loadError = kind === 'signin' ? 'Your sign-in has ended. Reload the page to sign in again.'
-        : kind === 'offline' ? 'The server does not answer.' : String(error?.message || error);
+        : kind === 'offline' ? 'The server does not answer.'
+          : kind === 'decision' ? 'The access decision service does not answer. Try again later.' : String(error?.message || error);
       update();
     }
   }
@@ -934,6 +971,7 @@ BB.cfg = config;
 
   function clearListing() {
     state.rows = [];
+    state.folderAccess = null;
     state.listError = '';
     state.listErrorText = '';
   }
@@ -1071,6 +1109,7 @@ BB.cfg = config;
       state.listError = '';
       state.listErrorText = '';
       state.nextContinuationToken = data.nextContinuationToken || '';
+      state.folderAccess = data.access && typeof data.access === 'object' ? data.access : null;
       state.navigationSortAvailable = data.sortAvailable === true;
       if (!state.navigationSortAvailable) {
         state.navigationSortField = '';

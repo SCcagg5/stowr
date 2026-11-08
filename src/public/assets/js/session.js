@@ -1,8 +1,10 @@
 /*!
  * BB.session: one clear message for the answers that concern the whole page.
  *
- * - 401 (from a reverse proxy that authenticates in front of Stowr): the sign-in has ended. The page shows one
- *   notice with a "Reload" button: the reverse proxy then asks for a new sign-in.
+ * - 401 (the identity token is absent or not valid): the sign-in has ended. The page shows one notice with a
+ *   "Reload" button: the access gateway then asks for a new sign-in.
+ * - 503 with the code pdp_unavailable: the server works, but the access decision service does not answer. The page
+ *   shows one notice with a "Try again" button. This is not "the server does not answer".
  * - No answer (a network error, or 502, 503 or 504 from a proxy): the server does not answer. The page shows one
  *   notice with a "Try again" button.
  * The module wraps window.fetch to see each answer of the server. It changes no request and no answer.
@@ -16,10 +18,11 @@
   const listeners = new Set();
   let signInEnded = false;
   let offline = false;
+  let decisionDown = false;
 
   function notify() {
     for (const listener of listeners) {
-      try { listener({ signInEnded, offline }); } catch (error) { console.error(error); }
+      try { listener({ signInEnded, offline, decisionDown }); } catch (error) { console.error(error); }
     }
     render();
   }
@@ -33,6 +36,17 @@
     }
   }
 
+  // A 503 of the server with the code pdp_unavailable: the access decision service gives no decision.
+  async function isDecisionDown(response) {
+    try {
+      if (!(response.headers.get('Content-Type') || '').includes('application/json')) return false;
+      const payload = await response.clone().json();
+      return payload?.error?.code === 'pdp_unavailable';
+    } catch (_) {
+      return false;
+    }
+  }
+
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async function sessionFetch(input, init) {
     const watched = sameOrigin(input);
@@ -40,8 +54,16 @@
       const response = await nativeFetch(input, init);
       if (watched) {
         if (response.status === 401) markSignInEnded();
-        else if ([502, 503, 504].includes(response.status)) markOffline(true);
-        else if (offline) markOffline(false);
+        else if (response.status === 503 && await isDecisionDown(response)) {
+          markDecisionDown(true);
+          if (offline) markOffline(false);
+        } else if ([502, 503, 504].includes(response.status)) {
+          markOffline(true);
+          if (decisionDown) markDecisionDown(false);
+        } else {
+          if (offline) markOffline(false);
+          if (decisionDown) markDecisionDown(false);
+        }
       }
       return response;
     } catch (error) {
@@ -59,6 +81,12 @@
   function markOffline(value) {
     if (offline === Boolean(value)) return;
     offline = Boolean(value);
+    notify();
+  }
+
+  function markDecisionDown(value) {
+    if (decisionDown === Boolean(value)) return;
+    decisionDown = Boolean(value);
     notify();
   }
 
@@ -108,6 +136,12 @@
           markOffline(false);
           document.dispatchEvent(new CustomEvent('bb:retry'));
         }));
+    } else if (decisionDown) {
+      items.push(notice('warn', 'lock', 'The access decision service does not answer.',
+        'Try again later.', 'Try again', () => {
+          markDecisionDown(false);
+          document.dispatchEvent(new CustomEvent('bb:retry'));
+        }));
     }
     node.replaceChildren(...items);
   }
@@ -118,6 +152,6 @@
     refresh: render,
     onChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     signInEnded: markSignInEnded,
-    get state() { return { signInEnded, offline }; }
+    get state() { return { signInEnded, offline, decisionDown }; }
   };
 })();

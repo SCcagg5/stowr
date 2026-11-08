@@ -7,8 +7,8 @@
  * parts, one under the other on one scroll:
  * - identity and permissions: the name, the id, the kind of storage, the host, the bucket, the root prefix and the
  *   region; read, write and delete with the reason of each decision (the ceiling of the configuration,
- *   server.access_mode = "force_read_only", a refusal of the provider). It never shows an endpoint, an admin URL,
- *   a token or the path of a volume on the server;
+ *   server.access_mode = "force_read_only", the access policy, a refusal of the provider). It never shows an
+ *   endpoint, an admin URL, a token or the path of a volume on the server;
  * - storage: what the bucket or the volume holds, its quota, and the capacity of the storage behind it (GET /api/usage);
  * - functions: versioning, encryption, Object Lock, lifecycle rules, tags, the edit of the metadata, the incomplete
  *   uploads and the SHA-256 checksum of the uploads;
@@ -144,6 +144,7 @@
     switch (String(state?.source || '')) {
       case 'configuration': return 'The permissions of the block in the configuration do not give it.';
       case 'runtime': return 'server.access_mode = "force_read_only" refuses each write and each delete.';
+      case 'access': return 'The access policy does not give it to you.';
       case 'provider': return 'The storage provider refused a real request a short time ago.';
       default: return '';
     }

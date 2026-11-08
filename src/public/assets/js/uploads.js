@@ -68,14 +68,22 @@
   function isUnreachable(error) {
     if (!error || isAbort(error)) return false;
     const status = Number(error.status);
+    // A 503 with the code pdp_unavailable is not a server that does not answer: the access decision service fails.
+    if (status === 503 && error.code === 'pdp_unavailable') return false;
     if (Number.isFinite(status) && status !== 0) return status === 502 || status === 503 || status === 504;
     return error instanceof TypeError || /network|failed to fetch|load failed/i.test(String(error.message || ''));
   }
 
   function reasonOf(error) {
     const status = Number(error?.status || 0);
-    if (status === 401) return 'Sign-in ended (401).';
-    if (status === 403) return 'Not allowed (403).';
+    if (status === 401) return 'Your session ended. Reload the page.';
+    if (status === 403) {
+      // The server names the action in its answer: "The action object.write is not allowed."
+      const action = String(error?.action || '').trim();
+      return action ? `The action ${action} is not allowed.` : 'Not allowed (403).';
+    }
+    if (status === 429 && error?.code === 'too_many_requests') return String(error.message || '').trim();
+    if (status === 503 && error?.code === 'pdp_unavailable') return String(error.message || '').trim();
     if (status === 413) return 'Too large for the server (413).';
     const message = String(error?.message || error || 'Upload failed.').trim();
     return status && !message.includes(String(status)) ? `${message} (${status}).` : message;

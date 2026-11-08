@@ -238,7 +238,7 @@ func (a *application) routeTable() []routeEntry {
 	return []routeEntry{
 		{"/s3", routeHandlerAsks, a.handleObjectGateway},
 		{"/-/", routeTokenOnly, a.handleStorageFrontend},
-		{"/api/instances", routeTokenOnly, a.handleInstances},
+		{"/api/instances", routeHandlerAsks, a.handleInstances},
 		{"/api/build", routeTokenOnly, a.handleBuild},
 		{"/api/permissions/refresh", routeHandlerAsks, a.handlePermissionRefresh},
 		{"/api/list", routeHandlerAsks, a.handleList},
@@ -297,15 +297,10 @@ func (a *application) handleInstances(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
-	instances := make([]instanceInfo, 0, len(a.order))
-	for _, id := range a.order {
-		instance := a.instances[id]
-		instances = append(instances, instance.publicInfo())
-		instance.refreshBucketFacts()
-	}
-	defaultID := ""
-	if len(a.order) > 0 {
-		defaultID = a.order[0]
+	instances, defaultID, err := a.visibleInstances(r)
+	if err != nil {
+		writeAPIError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"default":   defaultID,
@@ -422,7 +417,8 @@ func (a *application) handleList(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, err)
 		return
 	}
-	if _, err := a.authorizeRead(r, instance, prefix); err != nil {
+	display, err := a.listDisplay(r, instance, prefix)
+	if err != nil {
 		writeAPIError(w, err)
 		return
 	}
@@ -499,6 +495,12 @@ func (a *application) handleList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sortListItems(items)
+	if display.Navigation {
+		if items, err = a.navigationItems(r, instance, items); err != nil {
+			writeAPIError(w, err)
+			return
+		}
+	}
 	response := listResponseJSON{
 		Instance:              instance.cfg.ID,
 		Prefix:                prefix,
@@ -513,7 +515,7 @@ func (a *application) handleList(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, listResponseWithAccess{listResponseJSON: response, Access: display.Access})
 }
 
 // sortListItems orders folders before objects, then by case-insensitive name. The lower-cased names are computed

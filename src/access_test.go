@@ -312,7 +312,7 @@ func TestRouteTableKinds(t *testing.T) {
 			t.Errorf("accessExemptPath(%q) = true", path)
 		}
 	}
-	tokenOnly := map[string]bool{"/-/": true, "/api/instances": true, "/api/build": true, "/api/jobs": true, "/": true}
+	tokenOnly := map[string]bool{"/-/": true, "/api/build": true, "/api/jobs": true, "/": true}
 	for _, entry := range app.routeTable() {
 		if (entry.access == routeTokenOnly) != tokenOnly[entry.pattern] {
 			t.Errorf("route %q has the kind %d", entry.pattern, entry.access)
@@ -356,7 +356,7 @@ func TestRouteWithoutKindIsDenied(t *testing.T) {
 
 func TestTokenOnlyRoutesAskNothing(t *testing.T) {
 	env := newAccessTestEnv(t)
-	for _, target := range []string{"/", "/index.html", "/-/test-auth/rw/", "/api/build", "/assets/app.js", "/api/instances"} {
+	for _, target := range []string{"/", "/index.html", "/-/test-auth/rw/", "/api/build", "/assets/app.js"} {
 		recorder := env.doToken(http.MethodGet, target, "")
 		if recorder.Code != http.StatusOK {
 			t.Errorf("%s: status %d, body %q", target, recorder.Code, recorder.Body.String())
@@ -432,6 +432,7 @@ func atReadRoutes() []atReadRoute {
 	object := func(name, path string) atReadRoute {
 		return atReadRoute{name: name, method: http.MethodGet, target: path + "?" + key, resource: atFolder}
 	}
+	// GET and HEAD /api/list ask a batch of display questions: access_display_test.go tests them.
 	return []atReadRoute{
 		{name: "s3 get", method: http.MethodGet, target: "/s3?" + key, gateway: true, resource: atFolder},
 		{name: "s3 head", method: http.MethodHead, target: "/s3?" + key, gateway: true, resource: atFolder},
@@ -440,9 +441,6 @@ func atReadRoutes() []atReadRoute {
 		{name: "s3 raw list head", method: http.MethodHead, target: "/s3?instance=rw&prefix=folder%2Fnested%2F", gateway: true, resource: atSubfolder},
 		{name: "open get", method: http.MethodGet, target: "/open/?" + key, gateway: true, resource: atFolder},
 		{name: "open head", method: http.MethodHead, target: "/open/?" + key, gateway: true, resource: atFolder},
-		{name: "list", method: http.MethodGet, target: "/api/list?instance=rw&prefix=folder%2Fnested%2F", resource: atSubfolder},
-		{name: "list head", method: http.MethodHead, target: "/api/list?instance=rw&prefix=folder%2Fnested%2F", resource: atSubfolder},
-		{name: "list of the root", method: http.MethodGet, target: "/api/list?instance=rw", resource: atBucket},
 		{name: "stats", method: http.MethodGet, target: "/api/stats?instance=rw&prefix=folder%2F", resource: atFolder},
 		{name: "archive", method: http.MethodGet, target: "/api/archive?instance=rw&prefix=folder%2F", resource: atFolder},
 		object("spreadsheet", "/api/spreadsheet"),

@@ -2210,6 +2210,25 @@ button.versionCount:focus-visible {
   margin-top: 8px;
 }
 
+/* The note above a navigation listing: the person can open only the folders below. */
+.listingNote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.listingNote > .ic {
+  --icon-size: 16px;
+  flex: none;
+}
+
 /* Drop overlay ---------------------------------------------------------------------------------------------------- */
 
 .dropOverlay {
