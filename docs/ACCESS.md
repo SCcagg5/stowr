@@ -99,7 +99,7 @@ Before the integration, the operator and Stowr exchange the facts of P 10.0.
 | The origin of the action document | Stowr to the operator | The origin of Stowr and the path `/.well-known/procurauth/actions`. The reader needs no token. |
 | The name of the token header | Operator to Stowr | `access.identity.header` (default `X-Identity-Token`) |
 | The issuer | Operator to Stowr | `access.identity.issuer`: the `iss` of the tokens |
-| The public keys of the edge | Operator to Stowr | `access.identity.public_keys`, `_env` or `_file`: a JWK Set |
+| The public keys of the edge | Operator to Stowr | `access.identity.public_keys`, `_env` or `_file`: PEM or a JWK Set |
 | The maximum age of a token | Operator to Stowr | `access.identity.max_age` (default `5m`) |
 | The clock skew | Operator to Stowr | `access.identity.clock_skew` (default `60s`) |
 | The URL of the PDP | Operator to Stowr | `access.pdp.url`, `_env` or `_file` |
@@ -115,7 +115,7 @@ question"). The rules:
 
 - The header `alg` is exactly `Ed25519` or `ES256`. Stowr refuses `EdDSA`, `none`, `HS256` and each other name.
 - The header `typ` is exactly `JWT`. Stowr refuses another value (for example `at+jwt`) and a token without `typ`.
-- The header `kid` selects the key of the JWK Set. Stowr refuses an unknown `kid`, and a `kid` that belongs to a key of
+- The header `kid` selects the key. Stowr refuses an unknown `kid`, and a `kid` that belongs to a key of
   another algorithm. A token without `kid` is checked with each key of its algorithm.
 - Stowr refuses a header `crit`, a duplicate member in the header or in the claims, and a token of more than 16384 bytes.
 - The claims `iss`, `sub`, `aud`, `iat` and `exp` are mandatory. `iss` must be the configured issuer. `aud` must be the id of
@@ -138,9 +138,24 @@ Stowr also sets `Connection: close`, so that it does not read the body. The log 
 reason: `missing`, `malformed`, `algorithm`, `type`, `kid`, `signature`, `issuer`, `audience`, `expired`, `not_yet_valid`,
 `max_age`, `subject` or `claims`.
 
-The keys are a JWK Set (RFC 7517). It has 1 to 16 keys. Each key is an Ed25519 key (`kty` `OKP`, `crv` `Ed25519`) or a
-P-256 key (`kty` `EC`, `crv` `P-256`). Stowr accepts no PEM. It refuses a private member, two keys with one `kid`, and a
-duplicate member. A key without `kid` gets its RFC 7638 thumbprint as `kid`.
+### Public keys
+
+`access.identity.public_keys` holds PEM text or a JWK Set (RFC 7517), with the rules of ClickHouse Dash. Stowr reads the
+text as a JWK Set when it starts with `{` after spaces, tabs and line ends. Else it reads PEM.
+
+- PEM: 1 to 16 `-----BEGIN PUBLIC KEY-----` blocks. Each key is Ed25519 (`Ed25519`) or P-256 with an uncompressed point
+  (`ES256`). Outside a block, a line must be empty. Other text, a PEM header, a private key and another type of key stop
+  the start.
+- JWK Set: a JSON object with a `keys` array of 1 to 16 keys. A key of type `OKP` has `crv` `Ed25519` and `x` (RFC 8037). A
+  key of type `EC` has `crv` `P-256`, `x` and `y` (RFC 7518). The point of a P-256 key must be on the curve.
+- The `alg` of a JWK is optional. When it is present, it must be `Ed25519` (or `EdDSA`) for `OKP`, and `ES256` for `EC`. A
+  token header with the `alg` `EdDSA` stays refused. The members `use` and `key_ops` have no effect.
+- A JWK with a private member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth` or `k`), or with another `kty` or `crv`, stops the
+  start. The JWK parser also refuses a duplicate member and data after the JSON object.
+
+The `kid` of a key is the `kid` that the JWK declares: 1 to 256 bytes without a control character. A PEM key, or a JWK
+without `kid`, gets the RFC 7638 thumbprint of the key as `kid`. Two keys of a JWK Set cannot have the same `kid`.
+`print-config` shows each key as its type and its `kid`, for example `["Ed25519 kid=kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"]`.
 
 ## The network rule
 
@@ -581,10 +596,11 @@ race the check.
 
 ## Rotate a key
 
-1. Add the new public key to the JWK Set, with its `kid`. Keep the old key. Restart Stowr.
+1. Add the new public key to the text of `public_keys`: a new PEM block, or a new key of the JWK Set with its `kid`.
+   Keep the old key. Restart Stowr.
 2. Make the edge sign with the new key.
 3. Wait for `max_age` plus `clock_skew`: then each token that the old key signed is expired.
-4. Remove the old key from the JWK Set. Restart Stowr.
+4. Remove the old key from the text of `public_keys`. Restart Stowr.
 
 Stowr reads the keys one time at start. A restart clears the cache of tokens.
 
@@ -594,7 +610,8 @@ Stowr reads the keys one time at start. A restart clears the cache of tokens.
 |---|---|
 | Cache of identity tokens | 4096 entries |
 | Size of an identity token | 16384 bytes |
-| Keys in the JWK Set | 16 |
+| Keys in `public_keys` (PEM blocks or keys of the JWK Set) | 16 |
+| Base64 text of one PEM block | 4096 bytes |
 | Answer cache of the PDP | 16384 entries and 8 MiB |
 | Body of a PDP answer | 256 KiB |
 | Idle connections to the PDP | 4, closed after 5 s |

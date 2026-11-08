@@ -233,6 +233,10 @@ access {
 }
 ```
 
+The file of `public_keys_file` holds PEM public keys or a JWK Set, as in ClickHouse Dash. A text that starts with `{` is a JWK
+Set. Other text is PEM: 1 to 16 `-----BEGIN PUBLIC KEY-----` blocks, Ed25519 or P-256. [ACCESS.md](ACCESS.md), "Public keys",
+gives the rules.
+
 [configuration-reference.md](configuration-reference.md) gives each key of the block with its default, its range and its forms.
 [ACCESS.md](ACCESS.md) gives the rules of the identity token, the resource tree, the actions, the routes, the budgets and the
 errors.

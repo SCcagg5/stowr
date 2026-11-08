@@ -2,6 +2,17 @@
 
 This document uses ASD-STE100 Simplified Technical English.
 
+## Unreleased
+
+### Changes
+
+- `access.identity.public_keys` accepts PEM text again, as ClickHouse Dash does. A text that starts with `{` is a JWK Set.
+  Other text is PEM: 1 to 16 `-----BEGIN PUBLIC KEY-----` blocks, Ed25519 or P-256 with an uncompressed point. The `kid`
+  of a PEM key is its RFC 7638 thumbprint. Refer to `docs/ACCESS.md`, "Public keys".
+- A JWK follows the rules of ClickHouse Dash too: the `alg` `EdDSA` of an `OKP` key is accepted, and the members `use` and
+  `key_ops` have no effect. A token header with the `alg` `EdDSA` stays refused.
+- No configuration of 0.2.0 stops the start.
+
 ## 0.2.0 (2026-11-08)
 
 Stowr follows the protocol ProcurAuth for the access of people. The `access` block is mandatory again.
