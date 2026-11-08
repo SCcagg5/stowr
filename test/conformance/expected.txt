@@ -1,0 +1,2 @@
+# The cases that fail today and are known. One case id, then an optional "# reason". Blank lines and comment lines are allowed.
+# run.sh exits with 0 only when the set of failed cases is equal to this list. The list is empty when each case passes.

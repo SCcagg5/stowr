@@ -1,0 +1,59 @@
+{
+  "pep": {
+    "service": "infra-s3",
+    "token": {
+      "header": "X-Identity-Token",
+      "iss": "https://edge.example",
+      "max_age_seconds": 300,
+      "skew_seconds": 30,
+      "keys": [
+        { "alg": "Ed25519", "kid": "edge-ed25519", "file": "test-edge-ed25519.pem" },
+        { "alg": "ES256", "kid": "edge-es256", "file": "test-edge-es256.pem" }
+      ]
+    },
+    "pdp": { "listen": "127.0.0.1:8181", "credential_file": "pdp-token" },
+    "answer_cache": false,
+    "options_type": "bucket",
+    "operations": {
+      "use_plain": {
+        "method": "GET",
+        "path": "/s3?instance=conf&key=reports%2Fa.txt",
+        "action": "object.read",
+        "resource_type": "folder",
+        "resource_id": "reports",
+        "ancestors": [ { "type": "service", "id": "infra-s3" }, { "type": "bucket", "id": "conf" } ]
+      },
+      "use_ceiling": {
+        "method": "GET",
+        "path": "/s3?instance=conf&key=reports%2Fa.txt",
+        "action": "object.read",
+        "resource_type": "folder",
+        "resource_id": "reports",
+        "ancestors": [ { "type": "service", "id": "infra-s3" }, { "type": "bucket", "id": "conf" } ],
+        "ceiling": "max_object_size",
+        "ceiling_value": 1048576
+      },
+      "use_budget": {
+        "method": "PUT",
+        "path": "/s3?instance=conf&key=reports%2Fnew.txt",
+        "headers": { "Content-Type": "text/plain" },
+        "body_text": "x",
+        "action": "object.write",
+        "resource_type": "folder",
+        "resource_id": "reports",
+        "ancestors": [ { "type": "service", "id": "infra-s3" }, { "type": "bucket", "id": "conf" } ]
+      },
+      "use_multi": {
+        "method": "POST",
+        "path": "/api/copy",
+        "headers": { "Content-Type": "application/json" },
+        "body": { "instance": "conf", "src": "reports/a.txt", "dst": "reports/copy.txt", "isPrefix": false },
+        "action": "object.write",
+        "resource_type": "folder",
+        "resource_id": "reports",
+        "ancestors": [ { "type": "service", "id": "infra-s3" }, { "type": "bucket", "id": "conf" } ]
+      }
+    }
+  },
+  "timeouts": { "request_seconds": 20, "case_seconds": 60, "settle_ms": 100 }
+}
