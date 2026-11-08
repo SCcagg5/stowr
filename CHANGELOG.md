@@ -2,6 +2,13 @@
 
 This document uses ASD-STE100 Simplified Technical English.
 
+## 0.1.2 (2026-11-08)
+
+### Changes
+
+- The list page has no "Back to site" link. Stowr behind a reverse proxy path prefix, for example `/s3/`, showed it on
+  its home page. A reverse proxy or the address bar gives the way back to the site.
+
 ## 0.1.1 (2026-10-23)
 
 Stowr has one browser interface and no authentication of its own. The API, the routes, the other keys and the
