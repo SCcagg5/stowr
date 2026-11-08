@@ -46,6 +46,8 @@ type volumeBackend struct {
 	root string
 	// prefix is the root_prefix of the block. Each key of the storage instance starts with it.
 	prefix string
+	// refuseLinks is true when the volume follows no symbolic link (volumeConfig.RefuseLinks).
+	refuseLinks bool
 	// writes is true when the start checked that the process can write in the root.
 	writes bool
 	// sizer counts the size of the files of the root in the background. A write marks its count old.
@@ -65,7 +67,7 @@ func newVolumeBackend(volume volumeConfig, forceReadOnly bool) (*volumeBackend, 
 			return nil, fmt.Errorf("volume %q: root_prefix %q: %v", volume.ID, volume.RootPrefix, err)
 		}
 	}
-	backend := &volumeBackend{cfg: volume.bucketConfig(), root: root, prefix: volume.RootPrefix}
+	backend := &volumeBackend{cfg: volume.bucketConfig(), root: root, prefix: volume.RootPrefix, refuseLinks: volume.RefuseLinks}
 	backend.sizer = newVolumeSizer(root)
 	if volume.writes() && !forceReadOnly {
 		if err := backend.probeWrite(); err != nil {
@@ -165,8 +167,8 @@ type volumeEntryKind int
 const (
 	volumeEntryFile volumeEntryKind = iota
 	volumeEntryFolder
-	// volumeEntryUnreadable is a symbolic link that leaves the root or that does not resolve, or a file that is not a
-	// regular file (device, socket, pipe). The listing with a delimiter shows it. No operation reads it.
+	// volumeEntryUnreadable is a symbolic link that leaves the root or that does not resolve (each symbolic link with
+	// RefuseLinks), or a file that is not a regular file (device, socket, pipe). The listing with a delimiter shows it. No operation reads it.
 	volumeEntryUnreadable
 )
 
@@ -208,6 +210,10 @@ func (b *volumeBackend) readFolder(ctx context.Context, real, namePrefix string)
 				entry.kind = volumeEntryFile
 			case mode&fs.ModeSymlink != 0:
 				entry.link = true
+				if b.refuseLinks {
+					// The entry stays unreadable: the volume follows no link.
+					break
+				}
 				if target, err := filepath.EvalSymlinks(filepath.Join(real, name)); err == nil && insideRoot(target, b.root) {
 					if info, err := os.Stat(target); err == nil && info.IsDir() {
 						entry.kind, entry.real = volumeEntryFolder, target
@@ -471,7 +477,7 @@ func (b *volumeBackend) Get(_ context.Context, key string, requestHeaders http.H
 	if strings.HasSuffix(key, "/") {
 		return objectResponse{StatusCode: http.StatusOK, Header: volumeHeaders(object), Body: io.NopCloser(strings.NewReader(""))}, nil
 	}
-	file, err := os.Open(real)
+	file, err := b.openRead(real)
 	if err != nil {
 		return objectResponse{}, volumeError(err)
 	}

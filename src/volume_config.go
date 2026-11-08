@@ -34,6 +34,9 @@ type volumeConfig struct {
 	// RootPrefix is "" or a relative folder path that ends with "/". The browser shows only this folder of Path.
 	RootPrefix   string
 	MaxScanPages int
+	// RefuseLinks is true when access.mode is authzen: the volume then follows no symbolic link. It is not a key of
+	// the file. The decode of the configuration sets it after the access block.
+	RefuseLinks bool
 }
 
 // bucketConfig gives the configuration of the storage instance of the volume. The instance has the host word

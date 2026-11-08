@@ -244,6 +244,10 @@ func decodeConfig(data, sourceName, sourceDir string) (appConfig, error) {
 	if err := validateAccessResources(cfg); err != nil {
 		return appConfig{}, err
 	}
+	// A volume follows no symbolic link when the server enforces the access policy (volume_path.go).
+	for index := range cfg.Volumes {
+		cfg.Volumes[index].RefuseLinks = cfg.Access.enforced()
+	}
 
 	return cfg, nil
 }

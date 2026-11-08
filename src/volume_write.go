@@ -216,7 +216,7 @@ func (b *volumeBackend) Delete(_ context.Context, full string) error {
 	case info.IsDir():
 		return nil
 	case info.Mode()&fs.ModeSymlink != 0:
-		if _, err := resolvePart(b.root, folder, key.name()); err != nil {
+		if _, err := resolvePart(b.root, folder, key.name(), b.refuseLinks); err != nil {
 			return err
 		}
 		if err := os.Remove(entry); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -272,7 +272,7 @@ func (b *volumeBackend) copyFile(ctx context.Context, source, destination string
 	if from.folder {
 		return b.makeFolder(to)
 	}
-	file, err := os.Open(real)
+	file, err := b.openRead(real)
 	if err != nil {
 		return volumeError(err)
 	}

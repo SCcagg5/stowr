@@ -18,12 +18,23 @@ import (
 //
 // A key is a path relative to the root of the volume: path, then root_prefix, without symbolic links. The server
 // refuses a key with an empty, "." or ".." part, a NUL byte, or a part longer than volumeMaxNameBytes. It resolves each
-// part of a path, one after the other. A symbolic link to a place inside the root is followed. A symbolic link that
-// leaves the root, or that does not resolve, stops the operation with volume_link_refused. The server never makes a
-// symbolic link. A key of a write must be valid UTF-8 and must not name a temporary file of Stowr.
+// part of a path, one after the other. With access.mode = "open", a symbolic link to a place inside the root is
+// followed. A symbolic link that leaves the root, or that does not resolve, stops the operation with
+// volume_link_refused.
+//
+// With access.mode = "authzen", the server follows no symbolic link: volumeConfig.RefuseLinks is true. The access
+// policy gives a grant on a folder by the key of the object, not by the real path. A link from one folder to another
+// folder would let a person read the other folder. Each symbolic link in the path of a key then stops the operation
+// with volume_link_refused. The listing shows such a link as an unreadable entry, and a walk leaves it out. The only
+// place that follows a link in a path is resolvePart, and the only other place is readFolder. Both read the refusal
+// from the same field. The last part of a file that Stowr opens for a read or a copy is opened with O_NOFOLLOW. The
+// part of the path that root_prefix gives is resolved at the start, and a link there is not a link of a key.
+//
+// The server never makes a symbolic link. A key of a write must be valid UTF-8 and must not name a temporary file
+// of Stowr.
 //
 // Limit: a process outside Stowr that changes a symbolic link between the check and the use of a path can race
-// the check. The API of Stowr cannot make a symbolic link.
+// the check, for each folder of the path. The API of Stowr cannot make a symbolic link.
 
 const (
 	// volumeTempPrefix starts the name of each temporary file of Stowr in a volume. The listings do not show
@@ -36,8 +47,8 @@ const (
 )
 
 // errVolumeLink is the refusal of a path with a symbolic link that leaves the root of the volume or that does not
-// resolve.
-var errVolumeLink = apiError{Status: http.StatusForbidden, Code: "volume_link_refused", Message: "the path has a symbolic link that leaves the volume or that does not resolve: Stowr does not follow it"}
+// resolve. With RefuseLinks, it is also the refusal of each symbolic link.
+var errVolumeLink = apiError{Status: http.StatusForbidden, Code: "volume_link_refused", Message: "the path has a symbolic link that Stowr does not follow: it leaves the volume, it does not resolve, or the access mode refuses each link"}
 
 func invalidVolumeKey(format string, values ...any) error {
 	return apiError{Status: http.StatusBadRequest, Code: "invalid_key", Message: fmt.Sprintf(format, values...)}
@@ -109,7 +120,7 @@ func resolveInside(root, rel string) (string, error) {
 		if part == "" || part == "." || part == ".." {
 			return "", fmt.Errorf("the path must not have an empty, \".\" or \"..\" part")
 		}
-		next, err := resolvePart(root, current, part)
+		next, err := resolvePart(root, current, part, false)
 		if err != nil {
 			return "", err
 		}
@@ -119,8 +130,9 @@ func resolveInside(root, rel string) (string, error) {
 }
 
 // resolvePart gives the real path of the name part in the real folder current. A symbolic link is followed when its
-// target is in root. The error of a part that does not exist is fs.ErrNotExist.
-func resolvePart(root, current, part string) (string, error) {
+// target is in root, except with refuseLinks: each symbolic link then gives errVolumeLink. This is the one place that
+// follows a link in a path. The error of a part that does not exist is fs.ErrNotExist.
+func resolvePart(root, current, part string, refuseLinks bool) (string, error) {
 	next := filepath.Join(current, part)
 	info, err := os.Lstat(next)
 	if err != nil {
@@ -129,11 +141,23 @@ func resolvePart(root, current, part string) (string, error) {
 	if info.Mode()&fs.ModeSymlink == 0 {
 		return next, nil
 	}
+	if refuseLinks {
+		return "", errVolumeLink
+	}
 	target, err := filepath.EvalSymlinks(next)
 	if err != nil || !insideRoot(target, root) {
 		return "", errVolumeLink
 	}
 	return target, nil
+}
+
+// openRead opens the real file for a read. With refuseLinks, a symbolic link at the end of the path gives an error, also
+// when a process outside Stowr made the link after the check of resolvePart.
+func (b *volumeBackend) openRead(real string) (*os.File, error) {
+	if !b.refuseLinks {
+		return os.Open(real)
+	}
+	return os.OpenFile(real, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 }
 
 // resolveFolder gives the real path of the folder of parts. With create, a folder that does not exist is made, with
@@ -142,12 +166,12 @@ func resolvePart(root, current, part string) (string, error) {
 func (b *volumeBackend) resolveFolder(parts []string, create bool) (string, error) {
 	current := b.root
 	for _, part := range parts {
-		next, err := resolvePart(b.root, current, part)
+		next, err := resolvePart(b.root, current, part, b.refuseLinks)
 		if errors.Is(err, fs.ErrNotExist) && create {
 			next = filepath.Join(current, part)
 			if err = os.Mkdir(next, 0o777); errors.Is(err, fs.ErrExist) {
 				// An other request made the folder at the same time.
-				next, err = resolvePart(b.root, current, part)
+				next, err = resolvePart(b.root, current, part, b.refuseLinks)
 			}
 		}
 		if err != nil {
@@ -177,7 +201,7 @@ func (b *volumeBackend) resolveExisting(key volumeKey) (string, os.FileInfo, err
 	}
 	target := folder
 	if name := key.name(); name != "" {
-		if target, err = resolvePart(b.root, folder, name); err != nil {
+		if target, err = resolvePart(b.root, folder, name, b.refuseLinks); err != nil {
 			return "", nil, volumeError(err)
 		}
 	}
@@ -204,7 +228,7 @@ func (b *volumeBackend) writeTarget(key volumeKey) (string, error) {
 	case err != nil:
 		return "", volumeError(err)
 	case info.Mode()&fs.ModeSymlink != 0:
-		resolved, err := resolvePart(b.root, folder, key.name())
+		resolved, err := resolvePart(b.root, folder, key.name(), b.refuseLinks)
 		if err != nil {
 			return "", err
 		}
@@ -272,6 +296,8 @@ func volumeError(err error) error {
 		return &upstreamError{StatusCode: http.StatusNotFound, Code: "NoSuchKey", Message: "the file does not exist"}
 	case errors.Is(err, fs.ErrPermission):
 		return &upstreamError{StatusCode: http.StatusForbidden, Code: "AccessDenied", Message: "the file system refused the access to the process of Stowr"}
+	case errno == syscall.ELOOP:
+		return errVolumeLink
 	case errno == syscall.ENOSPC || errno == syscall.EDQUOT:
 		return apiError{Status: http.StatusInsufficientStorage, Code: "volume_full", Message: "the volume has no free space"}
 	case errno == syscall.EROFS:
