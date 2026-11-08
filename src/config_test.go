@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,10 @@ import (
 func TestConfigurationReferenceIsCurrent(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile(filepath.Join("..", "docs", "configuration-reference.md"))
+	if errors.Is(err, fs.ErrNotExist) {
+		// The image build (test/browser/Dockerfile) copies only src. The CI and a checkout have docs.
+		t.Skip("the tree has no docs folder")
+	}
 	if err != nil {
 		t.Fatalf("read the reference: %v", err)
 	}
