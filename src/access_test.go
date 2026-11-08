@@ -627,6 +627,31 @@ func TestAuthorizeWithoutIdentityGives401(t *testing.T) {
 	}
 }
 
+// The options route needs the identity token: without it the answer is 401 and the PDP gets no question (U75). With
+// it, the route asks only subtree questions without usage (ProcurAuth 5.6).
+func TestOptionsRouteThroughTheRouter(t *testing.T) {
+	env := newAccessTestEnv(t)
+	if recorder := env.do(http.MethodGet, accessOptionsPath+"?type=bucket", "", nil); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: status %d, want 401", recorder.Code)
+	}
+	if count := len(env.fake.Questions()); count != 0 {
+		t.Fatalf("no token: %d PDP questions, want 0", count)
+	}
+	recorder := env.doToken(http.MethodGet, accessOptionsPath+"?type=bucket", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("token: status %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	questions := env.fake.Questions()
+	if len(questions) == 0 {
+		t.Fatal("token: the PDP got no question")
+	}
+	for _, question := range questions {
+		if question.Match != "subtree" || question.Usage {
+			t.Fatalf("token: question %+v, want match subtree and no usage", question)
+		}
+	}
+}
+
 func TestAuthorizeOpenModeAsksNothing(t *testing.T) {
 	env := newAccessTestEnv(t)
 	env.app.config.Access = accessConfig{Mode: accessModeOpen}

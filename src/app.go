@@ -286,6 +286,7 @@ func (a *application) routeTable() []routeEntry {
 		{"/api/image-preview", routeHandlerAsks, a.handleImagePreview},
 		{"/healthz", routeExempt, a.handleHealth},
 		{accessActionsPath, routeExempt, a.handleAccessActions},
+		{accessOptionsPath, routeHandlerAsks, a.handleAccessOptions},
 		{"/open/", routeHandlerAsks, a.handleOpenOriginal},
 		{"/", routeTokenOnly, secureStaticHandler(a.publicFS).ServeHTTP},
 	}
