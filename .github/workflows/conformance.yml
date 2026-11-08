@@ -1,0 +1,51 @@
+name: Conformance
+
+# The conformance runner of ProcurAuth (access-conformance, role pep, series U) against Stowr (docs/CONFORMANCE.md).
+# The job runs test/conformance/run.sh. The script builds Stowr and the runner with Docker. It fails only for a failed case
+# that test/conformance/expected.txt does not list, or for a listed case that passes.
+# The ProcurAuth repository is public: the job checks it out without a secret.
+# The job checks out one fixed commit of ProcurAuth (the `ref` below). Thus a change of the runner never changes the result
+# alone. To change the commit, run test/conformance/run.sh with PROCURAUTH_DIR on the new commit, update expected.txt,
+# then write the full SHA of the new commit in `ref` and in docs/CONFORMANCE.md ("The commit of the runner").
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/access*.go"
+      - "src/app.go"
+      - "src/config.go"
+      - "src/config_keys.go"
+      - "test/conformance/**"
+      - ".github/workflows/conformance.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conformance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    name: ProcurAuth runner against Stowr
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Stowr
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout ProcurAuth
+        uses: actions/checkout@v4
+        with:
+          repository: SCcagg5/procurauth
+          # ProcurAuth main of 2026-11-07: the rule of use_ceiling (U37). docs/CONFORMANCE.md names the same commit.
+          ref: 7b1365206a363833ffe104b74357869636a4bb3f
+          path: procurauth
+          persist-credentials: false
+
+      - name: Run the series U
+        env:
+          PROCURAUTH_DIR: ${{ github.workspace }}/procurauth
+        run: test/conformance/run.sh

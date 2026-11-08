@@ -87,8 +87,12 @@ fixed commit of the ProcurAuth repository, and sets `PROCURAUTH_DIR` to it.
 
 ## The commit of the runner
 
-The workflow pins one commit of the ProcurAuth repository. The commit is `<commit>`. Thus a change of the runner never changes
-the result by itself.
+The workflow pins one commit of the ProcurAuth repository: `7b1365206a363833ffe104b74357869636a4bb3f` (2026-11-07, the
+rule of `use_ceiling` for U37). Thus a change of the runner never changes the result by itself.
+
+A later commit adds cases. With the commit `fe9719f8949e3af2d6508a9671a415c001c678fb` (2026-11-08), the run gives 110 cases:
+74 passed, 0 failed and 36 skipped. The new cases U100 to U110 are cases of the approval profile, and they need an MCP
+endpoint.
 
 To change the commit:
 
