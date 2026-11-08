@@ -2,7 +2,7 @@
 
 This document uses ASD-STE100 Simplified Technical English.
 
-## Unreleased
+## 0.2.0 (2026-11-08)
 
 Stowr follows the protocol ProcurAuth for the access of people. The `access` block is mandatory again.
 
