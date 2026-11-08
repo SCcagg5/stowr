@@ -205,7 +205,8 @@ func TestAccessConfigRefusals(t *testing.T) {
 		"audience 257 bytes":     {authzenText(ident(`"infra-s3"`, `"`+longText(257)+`"`), goodPDP), "access.identity.audience must have 1 to 256 bytes"},
 		"audience with control":  {authzenText(ident(`"infra-s3"`, `"a\u0007b"`), goodPDP), "access.identity.audience must have 1 to 256 bytes"},
 		"no public keys":         {authzenText(ident(`public_keys_file = "jwks.json"`, ""), goodPDP), "access.identity.public_keys is required"},
-		"public keys not JWK":    {authzenText(ident(`public_keys_file = "jwks.json"`, `public_keys = "not a key"`), goodPDP), "access.identity.public_keys: the JWK Set is not valid JSON"},
+		"public keys not a key":  {authzenText(ident(`public_keys_file = "jwks.json"`, `public_keys = "not a key"`), goodPDP), "access.identity.public_keys: line 1 is not -----BEGIN PUBLIC KEY-----"},
+		"public keys bad JWK":    {authzenText(ident(`public_keys_file = "jwks.json"`, `public_keys = "{\"keys\":"`), goodPDP), "access.identity.public_keys: the JWK Set is not valid JSON"},
 		"public keys file":       {authzenText(ident(`"jwks.json"`, `"missing.json"`), goodPDP), "public_keys_file: cannot read"},
 		"public keys two forms":  {authzenText(ident(`public_keys_file = "jwks.json"`, "public_keys_file = \"jwks.json\"\n    public_keys_env = \"X\""), goodPDP), "give only one of public_keys, public_keys_env and public_keys_file"},
 		"public keys bad key":    {authzenText(ident(`public_keys_file = "jwks.json"`, `public_keys = "{\"keys\":[{\"kty\":\"RSA\"}]}"`), goodPDP), "access.identity.public_keys: key 1: kty"},
@@ -488,6 +489,24 @@ func TestAccessConfigReadsTheEnvironmentOnlyWhenTheFileNamesIt(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%s: error = %v, want %q", name, err, test.want)
 		}
+	}
+}
+
+// A PEM file in public_keys_file gives the same keys and the same print-config form as a JWK Set: the type and the
+// RFC 7638 thumbprint.
+func TestAccessConfigPEMPublicKeys(t *testing.T) {
+	t.Parallel()
+	identity := strings.Replace(goodIdentity, `public_keys_file = "jwks.json"`, `public_keys_file = "edge.pem"`, 1)
+	cfg, dir, err := decodeAccessTestConfig(t, authzenText(identity, goodPDP), map[string]string{"edge.pem": rfc8037PEM(t) + rfc7515PEM(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Access.Keys) != 2 || cfg.Access.Keys[0].Alg != identityAlgEd25519 || cfg.Access.Keys[1].Alg != identityAlgES256 {
+		t.Fatalf("keys = %+v", cfg.Access.Keys)
+	}
+	want := `access.identity.public_keys = ["Ed25519 kid=` + rfc8037Thumbprint + `", "P-256 kid=` + cfg.Access.Keys[1].KID + `"]  # file:` + filepath.Join(dir, "edge.pem")
+	if printed := formatEffectiveConfiguration(cfg); !strings.Contains(printed, want+"\n") {
+		t.Fatalf("print-config misses the line %q:\n%s", want, printed)
 	}
 }
 

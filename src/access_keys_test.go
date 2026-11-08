@@ -1,10 +1,17 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 )
@@ -96,9 +103,10 @@ func TestParseIdentityPublicKeysRefusals(t *testing.T) {
 		text string
 		want string
 	}{
-		"not JSON":                {`not json`, "not valid JSON"},
-		"empty text":              {``, "not valid JSON"},
-		"array at the top":        {`[]`, "must be a JSON object"},
+		"not JSON, so not PEM":    {`not json`, "line 1 is not -----BEGIN PUBLIC KEY-----"},
+		"empty text":              {``, "no key"},
+		"array at the top":        {`[]`, "line 1 is not -----BEGIN PUBLIC KEY-----"},
+		"JSON that is not valid":  {`{"keys":`, "not valid JSON"},
 		"no keys member":          {`{}`, `must have the member "keys"`},
 		"keys is not an array":    {`{"keys":{}}`, `"keys" must be an array`},
 		"no keys":                 {`{"keys":[]}`, "has no key"},
@@ -112,13 +120,10 @@ func TestParseIdentityPublicKeysRefusals(t *testing.T) {
 		"private member d":        {keySet(edJWK(`,"d":"` + rfc8037X + `"`)), `private member "d"`},
 		"private member k":        {keySet(edJWK(`,"k":"AAAA"`)), `private member "k"`},
 		"private member oth":      {keySet(ecJWK(`,"oth":[]`)), `private member "oth"`},
-		"alg EdDSA":               {keySet(edJWK(`,"alg":"EdDSA"`)), `alg must be "Ed25519"`},
+		"alg EdDSA for EC":        {keySet(ecJWK(`,"alg":"EdDSA"`)), `alg must be "ES256"`},
 		"alg mismatch":            {keySet(edJWK(`,"alg":"ES256"`)), `alg must be "Ed25519"`},
 		"alg mismatch for EC":     {keySet(ecJWK(`,"alg":"Ed25519"`)), `alg must be "ES256"`},
 		"alg is not a string":     {keySet(edJWK(`,"alg":5`)), `"alg" must be a string`},
-		"use enc":                 {keySet(edJWK(`,"use":"enc"`)), `use must be "sig"`},
-		"key_ops without verify":  {keySet(edJWK(`,"key_ops":["sign"]`)), `key_ops must contain "verify"`},
-		"key_ops is not an array": {keySet(edJWK(`,"key_ops":"verify"`)), `"key_ops" must be an array`},
 		"empty kid":               {keySet(edJWK(`,"kid":""`)), "kid must have 1 to 256 bytes"},
 		"long kid":                {keySet(edJWK(`,"kid":"` + strings.Repeat("k", 257) + `"`)), "kid must have 1 to 256 bytes"},
 		"kid with a control":      {keySet(edJWK(`,"kid":"a\u0001b"`)), "kid must have 1 to 256 bytes"},
@@ -134,7 +139,7 @@ func TestParseIdentityPublicKeysRefusals(t *testing.T) {
 		"x in base64 standard":    {keySet(`{"kty":"OKP","crv":"Ed25519","x":"` + strings.ReplaceAll(rfc8037X, "_", "/") + `"}`), `"x" must be base64url without padding`},
 		"x is not a string":       {keySet(`{"kty":"OKP","crv":"Ed25519","x":1}`), `"x" must be a string`},
 		"y too short":             {keySet(`{"kty":"EC","crv":"P-256","x":"` + rfc7515X + `","y":"` + strings.Repeat("A", 42) + `"}`), `"y" must hold 32 bytes, got 31`},
-		"point not on the curve":  {keySet(`{"kty":"EC","crv":"P-256","x":"` + rfc7515X + `","y":"` + offCurveY + `"}`), "not on the curve P-256"},
+		"point not on the curve":  {keySet(`{"kty":"EC","crv":"P-256","x":"` + rfc7515X + `","y":"` + offCurveY + `"}`), "not a point of the curve P-256"},
 		"kty is not a string":     {keySet(`{"kty":1}`), `"kty" must be a string`},
 	} {
 		keys, err := parseIdentityPublicKeys(test.text)
@@ -150,8 +155,177 @@ func TestParseIdentityPublicKeysRefusals(t *testing.T) {
 
 func TestParseIdentityPublicKeysNamesThePositionOfTheKey(t *testing.T) {
 	t.Parallel()
-	_, err := parseIdentityPublicKeys(keySet(edJWK(`,"kid":"a"`), ecJWK(`,"kid":"b"`), edJWK(`,"kid":"c","use":"enc"`)))
+	_, err := parseIdentityPublicKeys(keySet(edJWK(`,"kid":"a"`), ecJWK(`,"kid":"b"`), edJWK(`,"kid":"c","alg":"ES256"`)))
 	if err == nil || !strings.HasPrefix(err.Error(), "key 3: ") {
 		t.Fatalf("error = %v, want a prefix \"key 3: \"", err)
+	}
+}
+
+// As in ClickHouse Dash: the alg EdDSA of an OKP key is accepted, and the members use and key_ops have no effect. The
+// alg EdDSA of a token header is still refused (access_identity.go).
+func TestParseIdentityPublicKeysJWKMembersWithoutEffect(t *testing.T) {
+	t.Parallel()
+	keys, err := parseIdentityPublicKeys(keySet(
+		edJWK(`,"kid":"a","alg":"EdDSA"`),
+		edJWK(`,"kid":"b","use":"enc"`),
+		edJWK(`,"kid":"c","key_ops":["sign"]`),
+		edJWK(`,"kid":"d","key_ops":"verify"`),
+		edJWK(`,"kid":"e\u0085"`),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if key.Alg != identityAlgEd25519 {
+			t.Fatalf("key %q has the alg %q, want Ed25519", key.KID, key.Alg)
+		}
+	}
+}
+
+// pemBlock gives one PEM block of a SubjectPublicKeyInfo.
+func pemBlock(t *testing.T, public any) string {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+}
+
+// rfc8037PEM gives the Ed25519 key of RFC 8037, appendix A.3, as PEM.
+func rfc8037PEM(t *testing.T) string {
+	t.Helper()
+	x, err := base64.RawURLEncoding.DecodeString(rfc8037X)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pemBlock(t, ed25519.PublicKey(x))
+}
+
+// rfc7515PEM gives the P-256 key of RFC 7515, appendix A.3, as PEM.
+func rfc7515PEM(t *testing.T) string {
+	t.Helper()
+	x, _ := base64.RawURLEncoding.DecodeString(rfc7515X)
+	y, _ := base64.RawURLEncoding.DecodeString(rfc7515Y)
+	return pemBlock(t, &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)})
+}
+
+// A PEM key gets its RFC 7638 thumbprint as kid: the same kid as the JWK of the same key without kid.
+func TestParseIdentityPublicKeysPEM(t *testing.T) {
+	t.Parallel()
+	keys, err := parseIdentityPublicKeys(rfc8037PEM(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].Alg != identityAlgEd25519 || keys[0].KID != rfc8037Thumbprint || len(keys[0].Ed25519) != 32 {
+		t.Fatalf("Ed25519 PEM = %+v", keys)
+	}
+	if got := keys[0].display(); got != "Ed25519 kid="+rfc8037Thumbprint {
+		t.Fatalf("display = %q", got)
+	}
+	keys, err = parseIdentityPublicKeys(rfc7515PEM(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromJWK, err := parseIdentityPublicKeys(keySet(ecJWK("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].Alg != identityAlgES256 || keys[0].P256 == nil || keys[0].KID != fromJWK[0].KID {
+		t.Fatalf("P-256 PEM = %+v, want the kid %q", keys, fromJWK[0].KID)
+	}
+	if got := keys[0].display(); got != "P-256 kid="+fromJWK[0].KID {
+		t.Fatalf("display = %q", got)
+	}
+}
+
+// Two blocks, spaces and line ends around them, CRLF line ends, and 16 blocks are accepted.
+func TestParseIdentityPublicKeysPEMForms(t *testing.T) {
+	t.Parallel()
+	two := "\n  " + rfc8037PEM(t) + "\n\n" + rfc7515PEM(t) + "\n"
+	keys, err := parseIdentityPublicKeys(two)
+	if err != nil || len(keys) != 2 || keys[0].Alg != identityAlgEd25519 || keys[1].Alg != identityAlgES256 {
+		t.Fatalf("two blocks: keys = %+v, error = %v", keys, err)
+	}
+	crlf := strings.ReplaceAll(rfc8037PEM(t), "\n", "\r\n")
+	if keys, err := parseIdentityPublicKeys(crlf); err != nil || len(keys) != 1 {
+		t.Fatalf("CRLF: keys = %d, error = %v", len(keys), err)
+	}
+	// Two identical blocks give one kid two times. As in ClickHouse Dash, only a JWK Set refuses a repeated kid.
+	if keys, err := parseIdentityPublicKeys(rfc8037PEM(t) + rfc8037PEM(t)); err != nil || len(keys) != 2 {
+		t.Fatalf("two identical blocks: keys = %d, error = %v", len(keys), err)
+	}
+	sixteen := ""
+	for i := 0; i < 16; i++ {
+		public, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sixteen += pemBlock(t, public)
+	}
+	if keys, err := parseIdentityPublicKeys(sixteen); err != nil || len(keys) != 16 {
+		t.Fatalf("16 blocks: keys = %d, error = %v", len(keys), err)
+	}
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseIdentityPublicKeys(sixteen + pemBlock(t, public)); err == nil || !strings.Contains(err.Error(), "more than 16 keys") {
+		t.Fatalf("17 blocks: error = %v", err)
+	}
+}
+
+func TestParseIdentityPublicKeysPEMRefusals(t *testing.T) {
+	t.Parallel()
+	ed := rfc8037PEM(t)
+	body := strings.TrimSuffix(strings.TrimPrefix(ed, "-----BEGIN PUBLIC KEY-----\n"), "-----END PUBLIC KEY-----\n")
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A compressed P-256 point: the prefix of a SubjectPublicKeyInfo with a point of 33 bytes.
+	compressedDER := []byte{0x30, 0x39, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06,
+		0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x22, 0x00, 0x02}
+	compressedDER = append(compressedDER, make([]byte, 32)...)
+	compressed := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: compressedDER}))
+	// A P-256 point that is not on the curve: the y of RFC 7515 with its first byte changed.
+	x, _ := base64.RawURLEncoding.DecodeString(rfc7515X)
+	y, _ := base64.RawURLEncoding.DecodeString(rfc7515Y)
+	y[0] ^= 0xff
+	offCurve := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: append(append(append([]byte(nil), p256SPKIPrefix...), x...), y...)}))
+	for name, test := range map[string]struct {
+		text string
+		want string
+	}{
+		"text before the block":  {"keys:\n" + ed, "line 1 is not -----BEGIN PUBLIC KEY-----"},
+		"text after the block":   {ed + "end\n", "line 4 is not -----BEGIN PUBLIC KEY-----"},
+		"private key":            {"-----BEGIN PRIVATE KEY-----\n" + body + "-----END PRIVATE KEY-----\n", "line 1 is not -----BEGIN PUBLIC KEY-----"},
+		"PEM header":             {"-----BEGIN PUBLIC KEY-----\nProc-Type: 4,ENCRYPTED\n" + body + "-----END PUBLIC KEY-----\n", "key 1 is not valid base64"},
+		"no end line":            {strings.TrimSuffix(ed, "-----END PUBLIC KEY-----\n"), "-----END PUBLIC KEY----- is missing"},
+		"bad base64":             {"-----BEGIN PUBLIC KEY-----\n%%%%\n-----END PUBLIC KEY-----\n", "key 1 is not valid base64"},
+		"base64 without padding": {"-----BEGIN PUBLIC KEY-----\n" + strings.TrimRight(strings.TrimSpace(body), "=") + "\n-----END PUBLIC KEY-----\n", "key 1 is not valid base64"},
+		"empty block":            {"-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----\n", "key 1 is not an Ed25519 public key"},
+		"RSA key":                {pemBlock(t, &rsaKey.PublicKey), "key 1 is not an Ed25519 public key or a P-256 public key"},
+		"P-384 key":              {pemBlock(t, &p384.PublicKey), "key 1 is not an Ed25519 public key or a P-256 public key"},
+		"compressed P-256 point": {compressed, "key 1 is not an Ed25519 public key or a P-256 public key with an uncompressed point"},
+		"point not on the curve": {offCurve, "key 1 is not a point of the curve P-256"},
+		"second block is bad":    {ed + "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n", "key 2 is not an Ed25519 public key"},
+		"block too long":         {"-----BEGIN PUBLIC KEY-----\n" + strings.Repeat("A", 4097) + "\n-----END PUBLIC KEY-----\n", "key 1 is too long"},
+		"only spaces":            {" \n\t\n", "no key"},
+		"a JWK Set and PEM":      {keySet(edJWK("")) + "\n" + ed, "data after the JSON value"},
+		"PEM then a JWK Set":     {ed + keySet(edJWK("")), "line 4 is not -----BEGIN PUBLIC KEY-----"},
+	} {
+		keys, err := parseIdentityPublicKeys(test.text)
+		if err == nil {
+			t.Errorf("%s: the text was accepted (%d keys)", name, len(keys))
+			continue
+		}
+		if !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: error %q does not contain %q", name, err, test.want)
+		}
 	}
 }

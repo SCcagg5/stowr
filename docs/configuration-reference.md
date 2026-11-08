@@ -82,7 +82,7 @@ Syntax: `access { identity { ... } }`. One block with mode authzen. No block wit
 | `header` | text | "X-Identity-Token" | 1 to 64 characters: letters, digits and "-". Not Cookie, Authorization, Host, Content-Type or Content-Length | value | no | The name of the HTTP header that holds the identity token. |
 | `issuer` | text | (required) | 1 to 1024 bytes of UTF-8, without a control character | value | no | The iss of the identity tokens that the server accepts. |
 | `audience` | text | (required) | 1 to 256 bytes of UTF-8, without a control character | value | no | The id of this service. It is the aud of the tokens, the server of the action document and the root of each chain of resources. |
-| `public_keys` | text | (required) | a JWK Set (RFC 7517) with 1 to 16 keys, Ed25519 or P-256 | value, `_env`, `_file` | no | The public keys of the issuer. The server checks the signature of each identity token with them. It is not a secret: print-config shows the type and the kid of each key. |
+| `public_keys` | text | (required) | PEM (1 to 16 -----BEGIN PUBLIC KEY----- blocks) or a JWK Set (RFC 7517) with 1 to 16 keys. Each key is Ed25519 or P-256 | value, `_env`, `_file` | no | The public keys of the issuer. A text that starts with "{" is a JWK Set, other text is PEM. The server checks the signature of each identity token with them. It is not a secret: print-config shows the type and the kid of each key. |
 | `max_age` | duration | "5m" | 1s to 24h | value | no | The longest life (exp minus iat) of an identity token. |
 | `clock_skew` | duration | "60s" | 0s to 5m, whole seconds | value | no | The difference between the clock of the server and the clock of the issuer that the server accepts. |
 
